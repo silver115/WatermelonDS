@@ -65,3 +65,7 @@
 -keepattributes Signature
 -keep,allowobfuscation,allowshrinking class com.google.gson.reflect.TypeToken
 -keep,allowobfuscation,allowshrinking class * extends com.google.gson.reflect.TypeToken
+
+# Pokéwalker: JNI bindings and the settings screen referenced from pref_main.xml
+-keep class me.magnum.melonds.pokewalker.PokewalkerNative { *; }
+-keep class me.magnum.melonds.ui.settings.fragments.PokewalkerPreferencesFragment { *; }

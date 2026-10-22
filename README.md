@@ -2,6 +2,10 @@
 A Nintendo DS and DSi emulator for Android, built on top of [melonDS](https://melonds.kuribo64.net/) and the
 [melonDS Android port](https://github.com/rafaelvcaetano/melonDS-android) by rafaelvcaetano.
 
+> **This fork adds Pokéwalker support**: the HeartGold/SoulSilver infrared cartridge plus a built-in virtual
+> Pokéwalker that turns your phone's steps (Samsung Health, Health Connect, step exports) into strolls and watts.
+> Builds are on this repository's Releases page as *WatermelonDS Pokéwalker*. See [docs/POKEWALKER.md](docs/POKEWALKER.md).
+
 WatermelonDS is a fork that keeps up with upstream while adding RetroAchievements (including offline play), a Vulkan
 renderer, RetroArch shader presets and full external display support, wrapped in its own visual identity.
 

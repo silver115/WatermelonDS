@@ -1,0 +1,113 @@
+name: Pokéwalker build
+
+# Builds WatermelonDS with infrared / virtual Pokéwalker support and publishes
+# the APK to the "pokewalker-latest" release of this repository, ready to
+# download on an AYN Thor (or any arm64 Android device).
+
+on:
+  push:
+    branches: [ 'pokewalker' ]
+    paths-ignore: [ '**.md', 'docs/**' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pokewalker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-tests:
+    name: Virtual Pokéwalker tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and run the walker test suite
+        run: |
+          cmake -S pokewalker-tests -B build/pokewalker-tests -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build/pokewalker-tests -j
+          ./build/pokewalker-tests/walker_test
+
+  apk:
+    name: APK (arm64)
+    needs: native-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: zulu
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Signing key
+        env:
+          POKEWALKER_KEYSTORE: ${{ secrets.POKEWALKER_KEYSTORE }}
+          POKEWALKER_KEYSTORE_PASSWORD: ${{ secrets.POKEWALKER_KEYSTORE_PASSWORD }}
+        run: |
+          # Uses your own key if you add the POKEWALKER_KEYSTORE (base64) and
+          # POKEWALKER_KEYSTORE_PASSWORD secrets; otherwise the public key in
+          # .github/signing, which keeps updates installable over each other.
+          if [ -n "$POKEWALKER_KEYSTORE" ]; then
+            echo "$POKEWALKER_KEYSTORE" | base64 -d > "$RUNNER_TEMP/release.jks"
+            PASS="$POKEWALKER_KEYSTORE_PASSWORD"
+          else
+            cp .github/signing/pokewalker-release.jks "$RUNNER_TEMP/release.jks"
+            PASS=pokewalker
+          fi
+          {
+            echo "MELONDS_KEYSTORE=$RUNNER_TEMP/release.jks"
+            echo "MELONDS_KEYSTORE_PASSWORD=$PASS"
+            echo "MELONDS_KEY_ALIAS=pokewalker"
+            echo "MELONDS_KEY_PASSWORD=$PASS"
+          } >> local.properties
+
+      - name: Build
+        run: |
+          COMMIT=$(git rev-parse --short HEAD)
+          sed -i -e 's/\(versionName = "\)\(.*\)\("\)/\1\2 ('"$COMMIT"')\3/g' buildSrc/src/main/kotlin/AppConfig.kt
+          chmod +x ./gradlew
+          ./gradlew :app:regenerateVulkanSpirv :app:assembleGitHubPokewalkerRelease -Pmelonds.abis=arm64-v8a --stacktrace
+          mkdir -p dist
+          cp app/build/outputs/apk/gitHubPokewalker/release/*.apk dist/WatermelonDS-Pokewalker-arm64.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WatermelonDS-Pokewalker
+          path: dist/WatermelonDS-Pokewalker-arm64.apk
+
+      - name: Move the pokewalker-latest tag to this build
+        run: |
+          git config user.name "${GITHUB_ACTOR}"
+          git config user.email "${GITHUB_ACTOR}@users.noreply.github.com"
+          git tag -f pokewalker-latest
+          git push -f origin refs/tags/pokewalker-latest
+
+      - name: Publish release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: pokewalker-latest
+          name: 'WatermelonDS Pokéwalker (latest build)'
+          body: |
+            Latest build of the `pokewalker` branch (${{ github.sha }}).
+
+            **Install:** download `WatermelonDS-Pokewalker-arm64.apk` on your device and open it.
+            It installs next to the regular WatermelonDS / MelonDualDS app.
+
+            **Use:** load Pokémon HeartGold or SoulSilver, open the Pokéwalker menu in the game
+            and send a Pokémon on a stroll. Add steps in Settings → Pokéwalker.
+          prerelease: true
+          allowUpdates: true
+          removeArtifacts: true
+          replacesArtifacts: true
+          artifacts: dist/WatermelonDS-Pokewalker-arm64.apk
+          artifactContentType: application/vnd.android.package-archive
+          token: ${{ secrets.GITHUB_TOKEN }}

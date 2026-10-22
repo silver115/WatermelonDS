@@ -9,6 +9,8 @@ on:
 
 jobs:
   github-release:
+    # Upstream signing secrets only exist in the upstream repository.
+    if: github.repository == 'SapphireRhodonite/melonDS-android'
     runs-on: ubuntu-latest
 
     steps:

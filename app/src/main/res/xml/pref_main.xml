@@ -66,6 +66,14 @@
             android:fragment="me.magnum.melonds.ui.settings.fragments.RetroAchievementsPreferencesFragment" />
 
     <Preference
+            android:key="settings_home_pokewalker"
+            android:title="@string/pokewalker"
+            android:summary="@string/pokewalker_summary"
+            app:icon="@drawable/ic_pokewalker"
+            android:layout="@layout/preference_main_card"
+            android:fragment="me.magnum.melonds.ui.settings.fragments.PokewalkerPreferencesFragment" />
+
+    <Preference
             android:key="settings_home_cheats"
             android:title="@string/cheats"
             android:summary="@string/cheats_summary"

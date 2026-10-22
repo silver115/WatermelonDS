@@ -15,6 +15,8 @@ on:
 jobs:
   # This workflow contains a single job called "build"
   build:
+    # Upstream signing secrets only exist in the upstream repository.
+    if: github.repository == 'SapphireRhodonite/melonDS-android'
     # The type of runner that the job will run on
     runs-on: ubuntu-latest
 

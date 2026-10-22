@@ -13,6 +13,11 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Pokéwalker step sync (only read when the user taps "Sync steps") -->
+    <uses-permission android:name="android.permission.health.READ_STEPS" />
+
+    <!-- Health Connect needs Android 9+; the client library declares minSdk 26 and is only used on 28+. -->
+    <uses-sdk tools:overrideLibrary="androidx.health.connect.client" />
 
     <uses-feature android:glEsVersion="0x00030000" android:required="true" />
 
@@ -25,6 +30,7 @@
         </intent>
         <package android:name="com.android.documentsui" />
         <package android:name="com.google.android.documentsui" />
+        <package android:name="com.google.android.apps.healthdata" />
     </queries>
 
     <application
@@ -113,6 +119,24 @@
                 android:name="android.support.PARENT_ACTIVITY"
                 android:value="me.magnum.melonds.ui.romlist.RomListActivity"/>
         </activity>
+        <activity
+            android:name=".pokewalker.HealthPermissionsRationaleActivity"
+            android:label="@string/pokewalker_health_privacy_title"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE" />
+            </intent-filter>
+        </activity>
+        <activity-alias
+            android:name=".pokewalker.ViewPermissionUsageActivity"
+            android:targetActivity=".pokewalker.HealthPermissionsRationaleActivity"
+            android:permission="android.permission.START_VIEW_PERMISSION_USAGE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW_PERMISSION_USAGE" />
+                <category android:name="android.intent.category.HEALTH_PERMISSIONS" />
+            </intent-filter>
+        </activity-alias>
         <activity
             android:name=".ui.inputsetup.InputSetupActivity"
             android:label="@string/key_mapping"

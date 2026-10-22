@@ -180,4 +180,15 @@
         <item>rom_dir</item>
         <item>internal_dir</item>
     </string-array>
+
+    <string-array name="pokewalker_ir_mode_options">
+        <item>@string/pokewalker_ir_mode_virtual</item>
+        <item>@string/pokewalker_ir_mode_tcp</item>
+        <item>@string/pokewalker_ir_mode_off</item>
+    </string-array>
+    <string-array name="pokewalker_ir_mode_values" translatable="false">
+        <item>virtual</item>
+        <item>tcp</item>
+        <item>off</item>
+    </string-array>
 </resources>

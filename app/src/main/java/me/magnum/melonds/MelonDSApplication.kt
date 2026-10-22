@@ -65,6 +65,7 @@ class MelonDSApplication : Application(), Configuration.Provider {
             UriFileHandler(this, uriHandler),
             settingsRepository.getVulkanDriverConfiguration(applicationInfo.nativeLibraryDir),
         )
+        me.magnum.melonds.pokewalker.Pokewalker.applySettings(this)
     }
 
     private fun giveLibrashaderACacheDirectory() {

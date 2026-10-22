@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen
+        xmlns:android="http://schemas.android.com/apk/res/android"
+        xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <PreferenceCategory
+            android:title="@string/pokewalker_category_status"
+            app:iconSpaceReserved="false">
+
+        <Preference
+                android:key="pokewalker_status"
+                android:title="@string/pokewalker_status_loading"
+                android:persistent="false"
+                app:iconSpaceReserved="false" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
+            android:title="@string/pokewalker_category_steps"
+            app:iconSpaceReserved="false">
+
+        <Preference
+                android:key="pokewalker_sync_health_connect"
+                android:title="@string/pokewalker_sync_health_connect"
+                android:summary="@string/pokewalker_sync_health_connect_summary"
+                android:persistent="false"
+                app:iconSpaceReserved="false" />
+
+        <Preference
+                android:key="pokewalker_import_steps"
+                android:title="@string/pokewalker_import_steps"
+                android:summary="@string/pokewalker_import_steps_summary"
+                android:persistent="false"
+                app:iconSpaceReserved="false" />
+
+        <EditTextPreference
+                android:key="pokewalker_add_steps"
+                android:title="@string/pokewalker_add_steps"
+                android:summary="@string/pokewalker_add_steps_summary"
+                android:dialogTitle="@string/pokewalker_add_steps_dialog"
+                android:persistent="false"
+                app:iconSpaceReserved="false" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
+            android:title="@string/pokewalker_category_connection"
+            app:iconSpaceReserved="false">
+
+        <ListPreference
+                android:key="pokewalker_ir_mode"
+                android:title="@string/pokewalker_ir_mode"
+                android:summary="%s"
+                android:entries="@array/pokewalker_ir_mode_options"
+                android:entryValues="@array/pokewalker_ir_mode_values"
+                android:defaultValue="virtual"
+                app:iconSpaceReserved="false" />
+
+        <EditTextPreference
+                android:key="pokewalker_tcp_port"
+                android:title="@string/pokewalker_tcp_port"
+                android:defaultValue="8081"
+                app:iconSpaceReserved="false" />
+
+        <SwitchPreference
+                android:key="pokewalker_log_packets"
+                android:title="@string/pokewalker_log_packets"
+                android:summary="@string/pokewalker_log_packets_summary"
+                android:defaultValue="false"
+                app:iconSpaceReserved="false" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
+            android:title="@string/pokewalker_category_data"
+            app:iconSpaceReserved="false">
+
+        <Preference
+                android:key="pokewalker_export_eeprom"
+                android:title="@string/pokewalker_export_eeprom"
+                android:summary="@string/pokewalker_export_eeprom_summary"
+                android:persistent="false"
+                app:iconSpaceReserved="false" />
+
+        <Preference
+                android:key="pokewalker_import_eeprom"
+                android:title="@string/pokewalker_import_eeprom"
+                android:summary="@string/pokewalker_import_eeprom_summary"
+                android:persistent="false"
+                app:iconSpaceReserved="false" />
+
+        <Preference
+                android:key="pokewalker_export_log"
+                android:title="@string/pokewalker_export_log"
+                android:summary="@string/pokewalker_export_log_summary"
+                android:persistent="false"
+                app:iconSpaceReserved="false" />
+
+        <Preference
+                android:key="pokewalker_reset"
+                android:title="@string/pokewalker_reset"
+                android:summary="@string/pokewalker_reset_summary"
+                android:persistent="false"
+                app:iconSpaceReserved="false" />
+    </PreferenceCategory>
+</PreferenceScreen>

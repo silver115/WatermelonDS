@@ -751,6 +751,7 @@ class AndroidEmulatorManager(
     }
 
     private fun setupEmulator(emulatorConfiguration: EmulatorConfiguration) {
+        me.magnum.melonds.pokewalker.Pokewalker.applySettings(context)
         if (emulatorConfiguration.rendererConfiguration.renderer == VideoRenderer.VULKAN) {
             MelonDSAndroidInterface.configureVulkanDriver(
                 settingsRepository.getVulkanDriverConfiguration(context.applicationInfo.nativeLibraryDir)

@@ -10,6 +10,14 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+// Optional: build only some ABIs, e.g. -Pmelonds.abis=arm64-v8a (all the AYN Thor needs).
+val selectedAbis: List<String> = (project.findProperty("melonds.abis") as String?)
+    ?.split(',')
+    ?.map { it.trim() }
+    ?.filter { it.isNotEmpty() }
+    ?.takeIf { it.isNotEmpty() }
+    ?: listOf("armeabi-v7a", "arm64-v8a", "x86_64")
+
 data class LibrashaderAbiTarget(
     val abi: String,
     val rustTarget: String,
@@ -42,7 +50,7 @@ android {
         manifestPlaceholders["appName"] = "@string/app_name"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
-            abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a", "x86_64"))
+            abiFilters.addAll(selectedAbis)
         }
         externalNativeBuild {
             cmake {
@@ -107,6 +115,13 @@ android {
         create("nightly") {
             dimension = "build"
             applicationIdSuffix = ".nightly"
+        }
+        create("pokewalker") {
+            // Pokéwalker IR build: installs next to the regular app.
+            dimension = "build"
+            applicationIdSuffix = ".pokewalker"
+            versionNameSuffix = "-pokewalker"
+            manifestPlaceholders["appName"] = "WatermelonDS Pokéwalker"
         }
     }
     externalNativeBuild {
@@ -248,7 +263,8 @@ val librashaderAbiTargets = listOf(
         ndkLibTriple = "x86_64-linux-android",
         clangPrefix = "x86_64-linux-android",
     ),
-)
+).filter { it.abi in selectedAbis }
+
 
 fun librashaderToolSearchDirs(): List<File> {
     val pathDirs = System.getenv("PATH")
@@ -568,6 +584,7 @@ dependencies {
     implementation(libs.androidx.swiperefreshlayout)
     implementation(libs.androidx.window)
     implementation(libs.androidx.work)
+    implementation(libs.androidx.health.connect)
     implementation(libs.android.material)
 
     implementation(platform(libs.compose.bom))
