@@ -61,8 +61,8 @@ comes back too, as on the real device.
   (Black/White, B2/W2) are left alone.
 - The Health Connect route depends on another app putting your phone's steps
   on the Thor. If that doesn't work, use the export.
-- The in-app "update available" check still watches the upstream WatermelonDS
-  releases. Get Pokéwalker updates from your fork's Releases page instead.
+- The in-app update check is turned off in this build. Get new Pokéwalker
+  builds from your fork's Releases page.
 
 ## Troubleshooting
 
