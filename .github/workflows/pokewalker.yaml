@@ -55,7 +55,10 @@ jobs:
             exit 1
           fi
           yes | "$SDKMANAGER" --licenses > /dev/null || true
-          "$SDKMANAGER" --install "platforms;android-36" "ndk;28.0.13004108" "cmake;3.22.1" > /dev/null
+          if ! "$SDKMANAGER" --install "platforms;android-36" "ndk;28.0.13004108" "cmake;3.22.1" > "$RUNNER_TEMP/sdk.log" 2>&1; then
+            echo "::error title=sdkmanager failed::$(tail -n 15 "$RUNNER_TEMP/sdk.log" | sed ':a;N;$!ba;s/\n/%0A/g')"
+            exit 1
+          fi
           {
             echo "ANDROID_HOME=$SDK"
             echo "ANDROID_SDK_ROOT=$SDK"
@@ -92,9 +95,24 @@ jobs:
           COMMIT=$(git rev-parse --short HEAD)
           sed -i -e 's/\(versionName = "\)\(.*\)\("\)/\1\2 ('"$COMMIT"')\3/g' buildSrc/src/main/kotlin/AppConfig.kt
           chmod +x ./gradlew
-          ./gradlew :app:regenerateVulkanSpirv :app:assembleGitHubPokewalkerRelease -Pmelonds.abis=arm64-v8a --stacktrace
+          set -o pipefail
+          ./gradlew :app:regenerateVulkanSpirv :app:assembleGitHubPokewalkerRelease -Pmelonds.abis=arm64-v8a --stacktrace 2>&1 | tee "$RUNNER_TEMP/build.log"
           mkdir -p dist
           cp app/build/outputs/apk/gitHubPokewalker/release/*.apk dist/WatermelonDS-Pokewalker-arm64.apk
+
+      - name: Report build errors as annotations
+        if: failure()
+        run: |
+          # Surfaces compiler/Gradle errors in the run's annotations so they can be read without the raw log.
+          LOG="$RUNNER_TEMP/build.log"
+          [ -f "$LOG" ] || exit 0
+          grep -nE "^e: |: error:|error: |What went wrong|FAILED|Could not |Exception:|Execution failed|> " "$LOG" | grep -v "^.*> Task " | head -200 > "$RUNNER_TEMP/errors.txt" || true
+          [ -s "$RUNNER_TEMP/errors.txt" ] || tail -n 60 "$LOG" > "$RUNNER_TEMP/errors.txt"
+          cd "$RUNNER_TEMP" && split -l 20 errors.txt chunk_
+          for f in chunk_*; do
+            msg=$(sed -e 's/%/%25/g' -e 's/\r/%0D/g' "$f" | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error title=Build log $f::$msg"
+          done
 
       - uses: actions/upload-artifact@v4
         with:
