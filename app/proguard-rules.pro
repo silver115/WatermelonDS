@@ -45,6 +45,9 @@
 }
 -keep interface me.magnum.melonds.common.camera.DSiCameraSource { *; }
 
+# Pokéwalker: JNI bindings and the settings screen opened by class name
+-keep class me.magnum.melonds.pokewalker.PokewalkerNative { *; }
+
 # Migration fields. These rules are required for migrations to work properly
 -keep,allowobfuscation class me.magnum.melonds.migrations.legacy.** { *; }
 

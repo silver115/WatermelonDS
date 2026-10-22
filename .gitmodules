@@ -1,6 +1,7 @@
 [submodule "melonDS-android-lib"]
 	path = melonDS-android-lib
-	url = https://github.com/rafaelvcaetano/melonDS-android-lib.git
+	url = ../melonDS-android-lib.git
+	branch = melonds-pokewalker
 
 [submodule "app/src/main/cpp/oboe"]
 	path = app/src/main/cpp/oboe

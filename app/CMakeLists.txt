@@ -49,6 +49,13 @@ add_library(
         ${ANDROID-CPP}/OpenGLContext.cpp
         ${ANDROID-CPP}/PlatformAndroid.cpp
         ${ANDROID-CPP}/PlatformAndroid_AAC.cpp
+        ${ANDROID-CPP}/pokewalker/EepromStore.cpp
+        ${ANDROID-CPP}/pokewalker/PlatformIR.cpp
+        ${ANDROID-CPP}/pokewalker/PokewalkerIR.cpp
+        ${ANDROID-CPP}/pokewalker/PokewalkerJNI.cpp
+        ${ANDROID-CPP}/pokewalker/PwProtocol.cpp
+        ${ANDROID-CPP}/pokewalker/PwText.cpp
+        ${ANDROID-CPP}/pokewalker/VirtualPokewalker.cpp
         ${ANDROID-CPP}/RetroAchievementsMapper.cpp
         ${ANDROID-CPP}/RewindManager.cpp
         ${ANDROID-CPP}/RomIconBuilder.cpp
@@ -71,4 +78,4 @@ target_include_directories(melonDS-android-frontend PUBLIC
         ${FAAD2}/include
         ${RCHEEVOS}/include
 )
-target_link_libraries(melonDS-android-frontend android core net-utils oboe faad enet rcheevos EGL GLESv3)
+target_link_libraries(melonDS-android-frontend android core net-utils oboe faad enet rcheevos EGL GLESv3 log)

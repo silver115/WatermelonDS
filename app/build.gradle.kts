@@ -11,6 +11,13 @@ plugins {
     alias(libs.plugins.room)
 }
 
+// Optional: build only some ABIs, e.g. -Pmelonds.abis=arm64-v8a (all an AYN Thor needs).
+val selectedAbis: List<String>? = (project.findProperty("melonds.abis") as String?)
+    ?.split(',')
+    ?.map { it.trim() }
+    ?.filter { it.isNotEmpty() }
+    ?.takeIf { it.isNotEmpty() }
+
 android {
     signingConfigs {
         create("release") {
@@ -36,7 +43,7 @@ android {
         versionName = AppConfig.versionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
-            abiFilters.addAll(listOf("arm64-v8a", "x86_64"))
+            abiFilters.addAll(selectedAbis ?: listOf("arm64-v8a", "x86_64"))
         }
         externalNativeBuild {
             cmake {
@@ -72,7 +79,9 @@ android {
             versionNameSuffix = " GH"
             ndk {
                 // Add 32 bit support only on GitHub releases
-                abiFilters.add("armeabi-v7a")
+                if (selectedAbis == null) {
+                    abiFilters.add("armeabi-v7a")
+                }
             }
         }
 
@@ -84,6 +93,12 @@ android {
             dimension = "build"
             applicationIdSuffix = ".nightly"
             versionNameSuffix = " (NIGHTLY)"
+        }
+        create("pokewalker") {
+            // Pokéwalker IR build: installs next to the regular app.
+            dimension = "build"
+            applicationIdSuffix = ".pokewalker"
+            versionNameSuffix = " (POKEWALKER)"
         }
     }
     externalNativeBuild {
@@ -140,6 +155,7 @@ dependencies {
     implementation(libs.androidx.startup)
     implementation(libs.androidx.window)
     implementation(libs.androidx.work)
+    implementation(libs.androidx.health.connect)
     implementation(libs.android.material)
 
     implementation(platform(libs.compose.bom))

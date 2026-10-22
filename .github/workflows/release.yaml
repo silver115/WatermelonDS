@@ -9,6 +9,8 @@ on:
 
 jobs:
   github-release:
+    # Upstream signing secrets only exist in rafaelvcaetano/melonDS-android.
+    if: github.repository == 'rafaelvcaetano/melonDS-android'
     runs-on: ubuntu-latest
 
     steps:
@@ -65,6 +67,8 @@ jobs:
             app/build/outputs/native-debug-symbols/gitHubProdRelease/native-debug-symbols.zip
 
   playstore-release:
+    # Upstream signing secrets only exist in rafaelvcaetano/melonDS-android.
+    if: github.repository == 'rafaelvcaetano/melonDS-android'
     runs-on: ubuntu-latest
 
     steps:

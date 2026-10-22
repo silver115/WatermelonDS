@@ -1,0 +1,101 @@
+package me.magnum.melonds.pokewalker
+
+import android.content.Context
+import android.util.Log
+import androidx.preference.PreferenceManager
+import java.io.File
+import java.text.DateFormat
+import java.util.Date
+import java.util.TimeZone
+
+/**
+ * Settings and storage for the infrared Pokéwalker support.
+ */
+object Pokewalker {
+    const val KEY_IR_MODE = "pokewalker_ir_mode"
+    const val KEY_TCP_PORT = "pokewalker_tcp_port"
+    const val KEY_LOG_PACKETS = "pokewalker_log_packets"
+
+    const val MODE_OFF = "off"
+    const val MODE_VIRTUAL = "virtual"
+    const val MODE_TCP = "tcp"
+
+    private const val TAG = "Pokewalker"
+    private const val MAX_LOG_BYTES = 4L * 1024 * 1024
+
+    @Volatile
+    private var logChecked = false
+
+    fun eepromFile(context: Context): File = File(File(context.filesDir, "pokewalker"), "eeprom.bin")
+
+    fun logFile(context: Context): File {
+        val base = context.getExternalFilesDir(null) ?: context.filesDir
+        return File(File(base, "pokewalker"), "pokewalker-log.txt")
+    }
+
+    /** Pushes the current preferences to the native side. Safe to call often. */
+    fun applySettings(context: Context) {
+        try {
+            val prefs = PreferenceManager.getDefaultSharedPreferences(context)
+            val mode = when (prefs.getString(KEY_IR_MODE, MODE_VIRTUAL)) {
+                MODE_OFF -> 0
+                MODE_TCP -> 2
+                else -> 1
+            }
+            val port = prefs.getString(KEY_TCP_PORT, "8081")?.trim()?.toIntOrNull()?.takeIf { it in 1..65535 } ?: 8081
+            val logPackets = prefs.getBoolean(KEY_LOG_PACKETS, false)
+
+            val eeprom = eepromFile(context)
+            eeprom.parentFile?.mkdirs()
+            val log = logFile(context)
+            log.parentFile?.mkdirs()
+            if (!logChecked) {
+                // Only before the native side opens the file: start a fresh log if it got big.
+                logChecked = true
+                if (log.length() > MAX_LOG_BYTES) log.delete()
+            }
+            PokewalkerNative.configure(mode, eeprom.absolutePath, log.absolutePath, port, logPackets)
+        } catch (e: Throwable) {
+            Log.e(TAG, "Could not configure the Pokéwalker", e)
+        }
+    }
+
+    fun status(): WalkerStatus = WalkerStatus.parse(PokewalkerNative.getStatusJson())
+}
+
+/**
+ * Local calendar days as "epoch day" numbers, without java.time (minSdk 24).
+ * Matches the day numbering the native walker uses for its 7-day history.
+ */
+object LocalDays {
+    const val DAY_MS = 86_400_000L
+
+    fun dayOf(millis: Long, tz: TimeZone = TimeZone.getDefault()): Long = Math.floorDiv(millis + tz.getOffset(millis), DAY_MS)
+
+    fun today(): Long = dayOf(System.currentTimeMillis())
+
+    /** First millisecond of the local day. */
+    fun startOfDay(day: Long, tz: TimeZone = TimeZone.getDefault()): Long {
+        val utcMidnight = day * DAY_MS
+        var start = utcMidnight - tz.getOffset(utcMidnight)
+        start = utcMidnight - tz.getOffset(start) // settle daylight-saving changes
+        return start
+    }
+
+    /** Proleptic Gregorian date to epoch day. */
+    fun fromCivil(year: Int, month: Int, day: Int): Long {
+        val y = if (month <= 2) year - 1 else year
+        val era = Math.floorDiv(y, 400)
+        val yoe = y - era * 400
+        val mp = (month + 9) % 12
+        val doy = (153 * mp + 2) / 5 + day - 1
+        val doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
+        return era * 146097L + doe - 719468L
+    }
+
+    fun format(day: Long): String {
+        val format = DateFormat.getDateInstance(DateFormat.MEDIUM)
+        format.timeZone = TimeZone.getTimeZone("UTC")
+        return format.format(Date(day * DAY_MS))
+    }
+}

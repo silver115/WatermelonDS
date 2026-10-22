@@ -15,6 +15,7 @@ documentFile = "1.1.0"
 fragment = "1.9.0"
 gradle = "9.3.1"
 gson = "2.14.0"
+healthConnect = "1.1.0"
 hiltX = "1.4.0"
 hilt = "2.60.1"
 junit = "4.13.2"
@@ -57,6 +58,7 @@ androidx-hilt-work = { module = "androidx.hilt:hilt-work", version.ref = "hiltX"
 androidx-lifecycle-viewmodel = { module = "androidx.lifecycle:lifecycle-viewmodel-ktx", version.ref = "lifecycleViewModel" }
 androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycleViewModel" }
 androidx-preference = { module = "androidx.preference:preference-ktx", version.ref = "preference" }
+androidx-health-connect = { module = "androidx.health.connect:connect-client", version.ref = "healthConnect" }
 androidx-recyclerview = { module = "androidx.recyclerview:recyclerview", version.ref = "recyclerView" }
 androidx-room = { module = "androidx.room:room-runtime", version.ref = "room" }
 androidx-room-ktx = { module = "androidx.room:room-ktx", version.ref = "room" }

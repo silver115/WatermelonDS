@@ -1,0 +1,148 @@
+name: melonDS Pokéwalker build
+
+# Builds melonDS Android with infrared / virtual Pokéwalker support and publishes
+# the APK to the "melonds-pokewalker-latest" release of this repository, ready to
+# download on an AYN Thor (or any arm64 Android device).
+
+on:
+  push:
+    branches: [ 'melonds-pokewalker' ]
+    paths-ignore: [ '**.md', 'docs/**' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: melonds-pokewalker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-tests:
+    name: Virtual Pokéwalker tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build and run the walker test suites
+        run: |
+          cmake -S pokewalker-tests -B build/pokewalker-tests -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build/pokewalker-tests -j
+          ./build/pokewalker-tests/walker_test
+          ./build/pokewalker-tests/hgss_flow_test
+
+  apk:
+    name: APK (arm64)
+    needs: native-tests
+    # Pinned: ubuntu-latest is moving to Ubuntu 26, where the Android toolchain setup breaks.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: zulu
+          cache: gradle
+
+      - name: Android SDK and NDK
+        run: |
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            echo "::error::Android SDK command-line tools not found under $SDK"
+            exit 1
+          fi
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          if ! "$SDKMANAGER" --install "platforms;android-37" "ndk;28.0.13004108" "cmake;3.22.1" > "$RUNNER_TEMP/sdk.log" 2>&1; then
+            echo "::error title=sdkmanager failed::$(tail -n 15 "$RUNNER_TEMP/sdk.log" | sed ':a;N;$!ba;s/\n/%0A/g')"
+            exit 1
+          fi
+          {
+            echo "ANDROID_HOME=$SDK"
+            echo "ANDROID_SDK_ROOT=$SDK"
+            echo "ANDROID_NDK_HOME=$SDK/ndk/28.0.13004108"
+          } >> "$GITHUB_ENV"
+
+      - name: Signing key
+        env:
+          POKEWALKER_KEYSTORE: ${{ secrets.POKEWALKER_KEYSTORE }}
+          POKEWALKER_KEYSTORE_PASSWORD: ${{ secrets.POKEWALKER_KEYSTORE_PASSWORD }}
+        run: |
+          # Uses your own key if you add the POKEWALKER_KEYSTORE (base64) and
+          # POKEWALKER_KEYSTORE_PASSWORD secrets; otherwise the public key in
+          # .github/signing, which keeps updates installable over each other.
+          if [ -n "$POKEWALKER_KEYSTORE" ]; then
+            echo "$POKEWALKER_KEYSTORE" | base64 -d > "$RUNNER_TEMP/release.jks"
+            PASS="$POKEWALKER_KEYSTORE_PASSWORD"
+          else
+            cp .github/signing/pokewalker-release.jks "$RUNNER_TEMP/release.jks"
+            PASS=pokewalker
+          fi
+          {
+            echo "MELONDS_KEYSTORE=$RUNNER_TEMP/release.jks"
+            echo "MELONDS_KEYSTORE_PASSWORD=$PASS"
+            echo "MELONDS_KEY_ALIAS=pokewalker"
+            echo "MELONDS_KEY_PASSWORD=$PASS"
+          } >> local.properties
+
+      - name: Build
+        run: |
+          COMMIT=$(git rev-parse --short HEAD)
+          sed -i -e 's/\(versionName = "\)\(.*\)\("\)/\1\2 ('"$COMMIT"')\3/g' buildSrc/src/main/kotlin/AppConfig.kt
+          chmod +x ./gradlew
+          set -o pipefail
+          ./gradlew :app:assembleGitHubPokewalkerRelease -Pmelonds.abis=arm64-v8a --stacktrace 2>&1 | tee "$RUNNER_TEMP/build.log"
+          mkdir -p dist
+          cp app/build/outputs/apk/gitHubPokewalker/release/*.apk dist/melonDS-Pokewalker-arm64.apk
+
+      - name: Report build errors as annotations
+        if: failure()
+        run: |
+          # Surfaces compiler/Gradle errors in the run's annotations so they can be read without the raw log.
+          LOG="$RUNNER_TEMP/build.log"
+          [ -f "$LOG" ] || exit 0
+          grep -nE "^e: |: error:|error: |What went wrong|FAILED|Could not |Exception:|Execution failed|> " "$LOG" | grep -v "^.*> Task " | head -200 > "$RUNNER_TEMP/errors.txt" || true
+          [ -s "$RUNNER_TEMP/errors.txt" ] || tail -n 60 "$LOG" > "$RUNNER_TEMP/errors.txt"
+          cd "$RUNNER_TEMP" && split -l 20 errors.txt chunk_
+          for f in chunk_*; do
+            msg=$(sed -e 's/%/%25/g' -e 's/\r/%0D/g' "$f" | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error title=Build log $f::$msg"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: melonDS-Pokewalker
+          path: dist/melonDS-Pokewalker-arm64.apk
+
+      - name: Move the melonds-pokewalker-latest tag to this build
+        run: |
+          git config user.name "${GITHUB_ACTOR}"
+          git config user.email "${GITHUB_ACTOR}@users.noreply.github.com"
+          git tag -f melonds-pokewalker-latest
+          git push -f origin refs/tags/melonds-pokewalker-latest
+
+      - name: Publish release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: melonds-pokewalker-latest
+          name: 'melonDS Pokéwalker (latest build)'
+          body: |
+            Latest build of the `melonds-pokewalker` branch (${{ github.sha }}): rafaelvcaetano's
+            melonDS Android with HeartGold/SoulSilver infrared support and a built-in virtual Pokéwalker.
+
+            **Install:** download `melonDS-Pokewalker-arm64.apk` on your device and open it.
+            It installs as "melonDS Pokéwalker", next to the regular melonDS app.
+
+            **Use:** in Pokémon HeartGold or SoulSilver, first put at least one Pokémon in a PC Box
+            and keep five Box spaces free (the game's own rule), then choose Pokéwalker on the
+            game's main menu and send a Pokémon on a stroll. Add steps in Settings → Pokéwalker.
+          prerelease: true
+          allowUpdates: true
+          removeArtifacts: true
+          replacesArtifacts: true
+          artifacts: dist/melonDS-Pokewalker-arm64.apk
+          artifactContentType: application/vnd.android.package-archive
+          token: ${{ secrets.GITHUB_TOKEN }}
