@@ -18,6 +18,11 @@ val selectedAbis: List<String>? = (project.findProperty("melonds.abis") as Strin
     ?.filter { it.isNotEmpty() }
     ?.takeIf { it.isNotEmpty() }
 
+// -Pmelonds.pokewalker.originalAppId=true builds the Pokéwalker flavour with the regular
+// melonDS app id (me.magnum.melonds), so it takes the place of the original app.
+// Android only lets it install after the original is uninstalled (different signing key).
+val pokewalkerUsesOriginalAppId = (project.findProperty("melonds.pokewalker.originalAppId") as String?)?.toBoolean() == true
+
 android {
     signingConfigs {
         create("release") {
@@ -95,9 +100,11 @@ android {
             versionNameSuffix = " (NIGHTLY)"
         }
         create("pokewalker") {
-            // Pokéwalker IR build: installs next to the regular app.
+            // Pokéwalker IR build: installs next to the regular app, or in its place (see above).
             dimension = "build"
-            applicationIdSuffix = ".pokewalker"
+            if (!pokewalkerUsesOriginalAppId) {
+                applicationIdSuffix = ".pokewalker"
+            }
             versionNameSuffix = " (POKEWALKER)"
         }
     }

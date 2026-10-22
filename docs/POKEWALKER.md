@@ -7,12 +7,38 @@ into Pokéwalker steps and watts.
 
 ## Install
 
-1. On the Thor, open the **Releases** page of your fork, find **melonDS
-   Pokéwalker (latest build)**, and download `melonDS-Pokewalker-arm64.apk`.
-2. Open it and allow installing from your browser if Android asks.
-3. It installs as **melonDS Pokéwalker**, next to the normal melonDS app.
-   Point it at the same ROM folder. Use one app at a time with a game, because
-   both apps read the same save file next to the ROM.
+On the Thor, open the **Releases** page of your fork and find **melonDS
+Pokéwalker (latest build)**. It has two APKs; pick one.
+
+**Next to your normal melonDS:** `melonDS-Pokewalker-arm64.apk`
+
+- It installs as a separate app, **melonDS Pokéwalker**.
+- Point it at the same ROM folder.
+- Use one app at a time with a game, because both apps read the same save file
+  next to the ROM.
+
+**In place of your normal melonDS:** `melonDS-Pokewalker-replaces-melonDS-arm64.apk`
+
+This one uses the official app's id (`me.magnum.melonds`). Android only installs
+an update when it's signed with the same key as the installed app, and only the
+melonDS developer has the official key. So it can't install over the official
+app as an update; you swap once:
+
+1. In melonDS, open *Settings → Save Files*. Game saves are next to your ROMs
+   or in the folder picked there, so they survive the swap. Save states do too,
+   unless *Save state location* is "Internal directory": those live inside the
+   app and are removed with it. To be safe, also copy your `.sav` and
+   save-state files somewhere else.
+2. Uninstall the official melonDS. Its settings go with it: ROM folders,
+   controls, layouts, BIOS/firmware choices and cheats.
+3. Install the replaces-melonDS APK, pick your ROM folder again, and redo any
+   settings you had changed.
+
+From then on, each new build of that APK installs over the last one like a
+normal update, keeping everything. Going back to the official melonDS works
+the same way: uninstall this one, then install the official app.
+
+Open the APK and allow installing from your browser if Android asks.
 
 ## Before you start: the game's own rules
 
@@ -97,8 +123,12 @@ on the walker comes back too, as on the real device.
   (Black/White, B2/W2) are left alone.
 - The Health Connect route depends on another app putting your phone's steps
   on the Thor. If that doesn't work, use the export.
-- The in-app update check is turned off in this build. Get new Pokéwalker
-  builds from your fork's Releases page.
+- The in-app update check is turned off in this build (it would offer official
+  builds, which can't install over it). Get new Pokéwalker builds from your
+  fork's Releases page.
+- The virtual Pokéwalker's data belongs to each app. To move it between the
+  side-by-side and replacing APKs, use *Export walker data* and *Import walker
+  data*.
 
 ## Troubleshooting
 

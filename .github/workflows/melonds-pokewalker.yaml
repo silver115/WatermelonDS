@@ -95,9 +95,14 @@ jobs:
           sed -i -e 's/\(versionName = "\)\(.*\)\("\)/\1\2 ('"$COMMIT"')\3/g' buildSrc/src/main/kotlin/AppConfig.kt
           chmod +x ./gradlew
           set -o pipefail
-          ./gradlew :app:assembleGitHubPokewalkerRelease -Pmelonds.abis=arm64-v8a --stacktrace 2>&1 | tee "$RUNNER_TEMP/build.log"
           mkdir -p dist
+          # 1) installs next to the regular melonDS (app id me.magnum.melonds.pokewalker)
+          ./gradlew :app:assembleGitHubPokewalkerRelease -Pmelonds.abis=arm64-v8a --stacktrace 2>&1 | tee "$RUNNER_TEMP/build.log"
           cp app/build/outputs/apk/gitHubPokewalker/release/*.apk dist/melonDS-Pokewalker-arm64.apk
+          rm -f app/build/outputs/apk/gitHubPokewalker/release/*.apk
+          # 2) takes the place of the regular melonDS (app id me.magnum.melonds)
+          ./gradlew :app:assembleGitHubPokewalkerRelease -Pmelonds.abis=arm64-v8a -Pmelonds.pokewalker.originalAppId=true --stacktrace 2>&1 | tee -a "$RUNNER_TEMP/build.log"
+          cp app/build/outputs/apk/gitHubPokewalker/release/*.apk dist/melonDS-Pokewalker-replaces-melonDS-arm64.apk
 
       - name: Report build errors as annotations
         if: failure()
@@ -116,7 +121,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: melonDS-Pokewalker
-          path: dist/melonDS-Pokewalker-arm64.apk
+          path: dist/*.apk
 
       - name: Move the melonds-pokewalker-latest tag to this build
         run: |
@@ -134,8 +139,14 @@ jobs:
             Latest build of the `melonds-pokewalker` branch (${{ github.sha }}): rafaelvcaetano's
             melonDS Android with HeartGold/SoulSilver infrared support and a built-in virtual Pokéwalker.
 
-            **Install:** download `melonDS-Pokewalker-arm64.apk` on your device and open it.
-            It installs as "melonDS Pokéwalker", next to the regular melonDS app.
+            **Install, pick one:**
+            - `melonDS-Pokewalker-arm64.apk` installs as a separate app, "melonDS Pokéwalker",
+              next to the regular melonDS.
+            - `melonDS-Pokewalker-replaces-melonDS-arm64.apk` takes the place of the regular melonDS
+              (same app id). Android can't install it over the official app because it is signed
+              with a different key, so uninstall the official melonDS first. Saves and save states
+              kept next to your ROMs (the default) stay; app settings start fresh. Later builds of
+              this file install over each other as normal updates.
 
             **Use:** in Pokémon HeartGold or SoulSilver, first put at least one Pokémon in a PC Box
             and keep five Box spaces free (the game's own rule), then choose Pokéwalker on the
@@ -144,6 +155,6 @@ jobs:
           allowUpdates: true
           removeArtifacts: true
           replacesArtifacts: true
-          artifacts: dist/melonDS-Pokewalker-arm64.apk
+          artifacts: dist/melonDS-Pokewalker-arm64.apk,dist/melonDS-Pokewalker-replaces-melonDS-arm64.apk
           artifactContentType: application/vnd.android.package-archive
           token: ${{ secrets.GITHUB_TOKEN }}
