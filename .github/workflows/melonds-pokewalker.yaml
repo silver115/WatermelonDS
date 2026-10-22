@@ -56,8 +56,9 @@ jobs:
             exit 1
           fi
           yes | "$SDKMANAGER" --licenses > /dev/null || true
-          if ! "$SDKMANAGER" --install "platforms;android-37" "ndk;28.0.13004108" "cmake;3.22.1" > "$RUNNER_TEMP/sdk.log" 2>&1; then
-            echo "::error title=sdkmanager failed::$(tail -n 15 "$RUNNER_TEMP/sdk.log" | sed ':a;N;$!ba;s/\n/%0A/g')"
+          # The compile SDK platform and build tools are fetched by the Android Gradle plugin itself.
+          if ! "$SDKMANAGER" --install "ndk;28.0.13004108" "cmake;3.22.1" > "$RUNNER_TEMP/sdk.log" 2>&1; then
+            echo "::error title=sdkmanager failed::$(tr '\r' '\n' < "$RUNNER_TEMP/sdk.log" | grep -v '^\s*$' | tail -n 15 | sed ':a;N;$!ba;s/\n/%0A/g')"
             exit 1
           fi
           {
