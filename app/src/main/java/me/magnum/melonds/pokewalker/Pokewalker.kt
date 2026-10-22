@@ -1,6 +1,7 @@
 package me.magnum.melonds.pokewalker
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import androidx.preference.PreferenceManager
 import java.io.File
@@ -33,8 +34,12 @@ object Pokewalker {
         return File(File(base, "pokewalker"), "pokewalker-log.txt")
     }
 
-    /** Pushes the current preferences to the native side. Safe to call often. */
-    fun applySettings(context: Context) {
+    /**
+     * Pushes the current preferences to the native side. Safe to call often.
+     * [startingGame] also logs the emulator settings the game starts with, which
+     * helps when a user sends an exported log.
+     */
+    fun applySettings(context: Context, startingGame: Boolean = false) {
         try {
             val prefs = PreferenceManager.getDefaultSharedPreferences(context)
             val mode = when (prefs.getString(KEY_IR_MODE, MODE_VIRTUAL)) {
@@ -55,6 +60,16 @@ object Pokewalker {
                 if (log.length() > MAX_LOG_BYTES) log.delete()
             }
             PokewalkerNative.configure(mode, eeprom.absolutePath, log.absolutePath, port, logPackets)
+            if (startingGame) {
+                val jit = prefs.getBoolean("enable_jit", Build.SUPPORTED_64_BIT_ABIS.isNotEmpty())
+                val system = prefs.getString("console_type", "ds")
+                val renderer = prefs.getString("video_renderer", "software")
+                val customBios = prefs.getBoolean("use_custom_bios", false)
+                PokewalkerNative.note(
+                    "Starting a game: app ${context.packageName}, JIT ${if (jit) "on" else "off"}, system $system, " +
+                        "renderer $renderer, ${if (customBios) "custom BIOS" else "built-in BIOS"}, Android ${Build.VERSION.RELEASE}, ${Build.MANUFACTURER} ${Build.MODEL}"
+                )
+            }
         } catch (e: Throwable) {
             Log.e(TAG, "Could not configure the Pokéwalker", e)
         }

@@ -17,6 +17,7 @@
 */
 
 #include <cassert>
+#include "pokewalker/PokewalkerIR.h"
 #include <chrono>
 #include <dlfcn.h>
 #include <filesystem>
@@ -67,6 +68,9 @@ namespace Platform
 
     void SignalStop(StopReason reason, void* userdata)
     {
+        char stopMsg[64];
+        snprintf(stopMsg, sizeof(stopMsg), "emulation stopped by the core (reason %d)", (int) reason);
+        pokewalker::ir::LogCoreMessage(true, stopMsg);
         MelonDSAndroid::eventMessenger->onEmulatorStop(reason);
     }
 
@@ -300,6 +304,8 @@ namespace Platform
 
         va_list args;
         va_start(args, fmt);
+        va_list pokewalkerArgs;
+        va_copy(pokewalkerArgs, args);
 
         switch (level)
         {
@@ -316,6 +322,16 @@ namespace Platform
                 __android_log_vprint(ANDROID_LOG_ERROR, "melonDS", fmt, args);
                 break;
         }
+
+        // Core warnings and errors also go to the Pokéwalker log, so a user's exported
+        // log shows crashes and other trouble around an IR session.
+        if (level == LogLevel::Warn || level == LogLevel::Error)
+        {
+            char line[256];
+            vsnprintf(line, sizeof(line), fmt, pokewalkerArgs);
+            pokewalker::ir::LogCoreMessage(level == LogLevel::Error, line);
+        }
+        va_end(pokewalkerArgs);
 
         va_end(args);
     }

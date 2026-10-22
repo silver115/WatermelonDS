@@ -113,6 +113,12 @@ private:
     AirState air = AirState::Idle;
     int quietPolls = 0;
     s64 lastPollMs = 0;
+    // Diagnostics: one "listening period" per connection attempt by the game.
+    bool listenSeen = false;
+    int listenAdverts = 0;
+    bool listenConnected = false;
+    s64 listenStartMs = 0;
+    s64 lastListenPollMs = 0;
     s64 lastAdvertMs = -1000000;
     s64 lastActivityMs = 0;
     s64 cooldownSinceMs = 0;

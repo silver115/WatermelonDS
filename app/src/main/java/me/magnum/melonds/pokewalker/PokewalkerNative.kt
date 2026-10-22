@@ -15,6 +15,9 @@ object PokewalkerNative {
 
     external fun getStatusJson(): String
 
+    /** Writes a line to the Pokéwalker log. */
+    external fun note(text: String)
+
     /** Adds steps walked [daysAgo] days ago (0 = today). Returns null on success, otherwise an error message. */
     external fun addSteps(steps: Int, daysAgo: Int): String?
 

@@ -44,6 +44,12 @@ Java_me_magnum_melonds_pokewalker_PokewalkerNative_configure(JNIEnv* env, jobjec
     pokewalker::ir::Configure(config);
 }
 
+JNIEXPORT void JNICALL
+Java_me_magnum_melonds_pokewalker_PokewalkerNative_note(JNIEnv* env, jobject, jstring text)
+{
+    pokewalker::ir::Note(ToStd(env, text));
+}
+
 JNIEXPORT jstring JNICALL
 Java_me_magnum_melonds_pokewalker_PokewalkerNative_getStatusJson(JNIEnv* env, jobject)
 {

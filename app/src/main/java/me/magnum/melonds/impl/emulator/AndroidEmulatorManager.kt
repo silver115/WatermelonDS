@@ -229,7 +229,7 @@ class AndroidEmulatorManager(
     }
 
     private fun setupEmulator(emulatorConfiguration: EmulatorConfiguration) {
-        me.magnum.melonds.pokewalker.Pokewalker.applySettings(context)
+        me.magnum.melonds.pokewalker.Pokewalker.applySettings(context, startingGame = true)
         MelonEmulator.setupEmulator(
             emulatorConfiguration = emulatorConfiguration,
             dsiCameraSource = cameraManager,

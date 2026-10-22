@@ -674,6 +674,23 @@ int VirtualPokewalker::OnGamePoll(u8* out, size_t maxLen)
     s64 sincePoll = now - lastPollMs;
     lastPollMs = now;
 
+    if (!listenSeen || sincePoll > kPollGapResetMs)
+    {
+        if (listenSeen && listenAdverts > 0 && !listenConnected)
+        {
+            char msg[160];
+            std::snprintf(msg, sizeof(msg), "The game stopped looking after %lld ms; it never answered the walker's %d signal(s)",
+                          (long long)(lastListenPollMs - listenStartMs), listenAdverts);
+            Log(msg);
+        }
+        Log("The game is looking for a Pokewalker (IR polling started)");
+        listenSeen = true;
+        listenAdverts = 0;
+        listenConnected = false;
+        listenStartMs = now;
+    }
+    lastListenPollMs = now;
+
     if (!pending.empty())
     {
         size_t n = std::min(maxLen, pending.size());
@@ -711,6 +728,8 @@ int VirtualPokewalker::OnGamePoll(u8* out, size_t maxLen)
         {
             lastAdvertMs = now;
             quietPolls = 0;
+            if (listenAdverts++ == 0)
+                Log("Sending the Pokewalker's connect signal to the game");
             out[0] = cmd::Advertising ^ AirXor;
             return 1;
         }
@@ -735,6 +754,7 @@ void VirtualPokewalker::StartSession(const std::vector<u8>& packet)
     air = AirState::Connected;
     havePeer = false;
     endAfterReply = false;
+    listenConnected = true;
 
     std::vector<u8> reply = BuildPacket(cmd::SlaveAck, ExtraFromWalker, walkerHalf, nullptr, 0);
     AirScramble(reply.data(), reply.size());

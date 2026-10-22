@@ -161,7 +161,15 @@ struct State
     bool tcpRunning = false;
     u32 gamecode = 0;
     u32 irversion = 0;
+    // The log file has its own lock so the emulator core can write to it
+    // without taking `lock` (lock order: lock, then logLock).
+    std::mutex logLock;
     FILE* logFile = nullptr;
+    std::string lastCoreLine;
+    int coreRepeats = 0;
+    int coreLines = 0;
+    s64 coreWindowStart = 0;
+    int coreWindowLines = 0;
 };
 
 State& S()
@@ -170,11 +178,9 @@ State& S()
     return *state;
 }
 
-void WriteLog(State& s, const std::string& line)
+// Caller holds s.logLock.
+void WriteLogLocked(State& s, const std::string& line)
 {
-#ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "Pokewalker", "%s", line.c_str());
-#endif
     if (!s.logFile) return;
     char stamp[32];
     time_t t = time(nullptr);
@@ -183,6 +189,25 @@ void WriteLog(State& s, const std::string& line)
     strftime(stamp, sizeof(stamp), "%Y-%m-%d %H:%M:%S", &lt);
     std::fprintf(s.logFile, "%s %s\n", stamp, line.c_str());
     std::fflush(s.logFile);
+}
+
+void WriteLog(State& s, const std::string& line)
+{
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_INFO, "Pokewalker", "%s", line.c_str());
+#endif
+    std::lock_guard<std::mutex> guard(s.logLock);
+    WriteLogLocked(s, line);
+}
+
+const char* ModeName(Mode mode)
+{
+    switch (mode)
+    {
+    case Mode::Virtual: return "virtual Pokewalker";
+    case Mode::Tcp: return "TCP";
+    default: return "off";
+    }
 }
 
 void LogPacket(State& s, const char* dir, const u8* data, int len)
@@ -205,6 +230,45 @@ bool VirtualActive(State& s)
 
 }
 
+void Note(const std::string& text)
+{
+    WriteLog(S(), text);
+}
+
+void LogCoreMessage(bool error, const char* text)
+{
+    if (!text) return;
+    State& s = S();
+    std::string line(text);
+    while (!line.empty() && (line.back() == '\n' || line.back() == '\r' || line.back() == ' '))
+        line.pop_back();
+    if (line.empty()) return;
+    std::lock_guard<std::mutex> guard(s.logLock);
+    if (!s.logFile) return;
+    if (line == s.lastCoreLine)
+    {
+        s.coreRepeats++;
+        return;
+    }
+    if (s.coreRepeats > 0)
+    {
+        WriteLogLocked(s, "[melonDS] (previous message repeated " + std::to_string(s.coreRepeats) + " more times)");
+        s.coreRepeats = 0;
+    }
+    s.lastCoreLine = line;
+    // At most 20 lines a second and 2000 per run, so a chatty game can't fill the log.
+    s64 now = (s64)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (now - s.coreWindowStart >= 1000) { s.coreWindowStart = now; s.coreWindowLines = 0; }
+    if (s.coreWindowLines >= 20 || s.coreLines >= 2000)
+    {
+        if (s.coreLines == 2000) { WriteLogLocked(s, "[melonDS] (further core messages are not logged)"); s.coreLines++; }
+        return;
+    }
+    s.coreWindowLines++;
+    s.coreLines++;
+    WriteLogLocked(s, std::string(error ? "[melonDS error] " : "[melonDS] ") + line);
+}
+
 bool IsPokewalkerGame(u32 gamecode)
 {
     char c0 = (char)(gamecode & 0xFF), c1 = (char)((gamecode >> 8) & 0xFF), c2 = (char)((gamecode >> 16) & 0xFF);
@@ -218,9 +282,11 @@ void Configure(const Config& config)
 
     if (config.logPath != s.config.logPath || !s.logFile)
     {
+        std::lock_guard<std::mutex> logGuard(s.logLock);
         if (s.logFile) std::fclose(s.logFile);
         s.logFile = config.logPath.empty() ? nullptr : std::fopen(config.logPath.c_str(), "a");
     }
+    bool modeChanged = config.mode != s.config.mode;
     s.config = config;
     s.walker.SetLogger([&s](const std::string& msg) { WriteLog(s, msg); });
 
@@ -229,6 +295,13 @@ void Configure(const Config& config)
         std::string error;
         if (!s.walker.Open(config.eepromPath, &error))
             WriteLog(s, "Cannot open virtual Pokewalker: " + error);
+    }
+    static bool firstConfigure = true;
+    if (firstConfigure || modeChanged)
+    {
+        WriteLog(s, std::string("Infrared mode: ") + ModeName(config.mode) +
+                        (config.mode == Mode::Virtual ? (s.walker.IsOpen() ? " (ready)" : " (NOT open)") : ""));
+        firstConfigure = false;
     }
 
     if (config.mode == Mode::Tcp)
@@ -256,7 +329,14 @@ void OnCartReset(u32 gamecode, u32 irversion)
     s.irversion = irversion;
     s.walker.OnCartReset();
     char code[5] = {(char)(gamecode & 0xFF), (char)((gamecode >> 8) & 0xFF), (char)((gamecode >> 16) & 0xFF), (char)(gamecode >> 24), 0};
-    WriteLog(s, std::string("IR cartridge inserted: ") + code);
+    for (int i = 0; i < 4; i++)
+        if (code[i] < 0x20 || code[i] > 0x7E) code[i] = '?';
+    std::string what;
+    if (!IsPokewalkerGame(gamecode)) what = " (not HeartGold/SoulSilver: walker stays silent)";
+    else if (s.config.mode != Mode::Virtual) what = std::string(" (infrared mode is ") + ModeName(s.config.mode) + ")";
+    else if (!s.walker.IsOpen()) what = " (virtual Pokewalker could NOT be opened)";
+    else what = " (virtual Pokewalker active)";
+    WriteLog(s, std::string("Game loaded / reset, IR cartridge ") + code + what);
 }
 
 int OnGameSend(const u8* data, int len)

@@ -55,6 +55,13 @@ bool StoreDowsed(u16 item, std::string* error);
 /// True for Pokémon HeartGold / SoulSilver game codes (IPK* / IPG*).
 bool IsPokewalkerGame(u32 gamecode);
 
+/// Adds a line from the app (e.g. the settings a game was started with) to the log.
+void Note(const std::string& text);
+
+/// Copies a melonDS core warning/error into the Pokéwalker log (rate limited).
+/// Safe to call from any thread, including from inside the emulator core.
+void LogCoreMessage(bool error, const char* text);
+
 }
 
 #endif
