@@ -17,6 +17,7 @@
 #include "NDSCart.h"
 #include "net/Net_Slirp.h"
 #include "Platform.h"
+#include "pokewalker/PokewalkerIR.h"
 #include "SDCardArgsBuilder.h"
 
 using namespace std;
@@ -358,6 +359,7 @@ u32 MelonInstance::runFrame()
 
     u32 nLines = nds->RunFrame();
     retroAchievementsManager->FrameUpdate();
+    pokewalker::ir::OnFrame(nds->MainRAM, nds->MainRAMMask, nds->KeyInput);
 
     if (!isRendererAccelerated)
     {
@@ -439,11 +441,13 @@ float MelonInstance::getMotionData(MotionQueryType type)
 void MelonInstance::touchScreen(u16 x, u16 y)
 {
     nds->TouchScreen(x, y);
+    pokewalker::ir::SetTouching(true);
 }
 
 void MelonInstance::releaseScreen()
 {
     nds->ReleaseScreen();
+    pokewalker::ir::SetTouching(false);
 }
 
 void MelonInstance::pressKey(u32 key)
@@ -503,6 +507,7 @@ void MelonInstance::loadCheats(std::list<Cheat> cheats)
     }
 
     nds->AREngine.Cheats = codeList;
+    pokewalker::ir::Note("Cheat codes active: " + std::to_string(codeList.size()));
 }
 
 int MelonInstance::sendNetPacket(u8* data, int length)

@@ -31,8 +31,22 @@ add_executable(hgss_flow_test
 )
 target_include_directories(hgss_flow_test PRIVATE ${PW_SRC})
 
+# The HG/SS copy check (SHA-1, backward LZ, overlay table parsing).
+add_executable(rom_check_test
+    rom_check_test.cpp
+    ${PW_SRC}/RomCheck.cpp
+)
+target_include_directories(rom_check_test PRIVATE ${PW_SRC})
+
+# The HG/SS screen trace (main RAM layout from the decompilation).
+add_executable(game_trace_test
+    game_trace_test.cpp
+    ${PW_SRC}/GameTrace.cpp
+)
+target_include_directories(game_trace_test PRIVATE ${PW_SRC})
+
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    foreach(t walker_test hgss_flow_test)
+    foreach(t walker_test hgss_flow_test rom_check_test game_trace_test)
         target_compile_options(${t} PRIVATE -Wall -Wextra -fsanitize=address,undefined -fno-omit-frame-pointer)
         target_link_options(${t} PRIVATE -fsanitize=address,undefined)
     endforeach()

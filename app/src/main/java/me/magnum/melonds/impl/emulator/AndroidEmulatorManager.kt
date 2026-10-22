@@ -123,6 +123,7 @@ class AndroidEmulatorManager(
                 messageQueue.start()
                 MelonEmulator.setupCheats(cheats.toTypedArray())
                 MelonEmulator.startEmulation()
+                me.magnum.melonds.pokewalker.Pokewalker.announceCopyCheck(context)
 
                 RomLaunchResult.LaunchSuccessful(loadResult != MelonEmulator.LoadResult.SUCCESS_GBA_FAILED)
             }

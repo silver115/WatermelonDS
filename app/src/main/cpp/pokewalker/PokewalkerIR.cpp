@@ -5,6 +5,7 @@
 
 #include "PokewalkerIR.h"
 
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
@@ -26,6 +27,9 @@
 #include <android/log.h>
 #endif
 
+#include "GameTrace.h"
+#include "PwText.h"
+#include "RomCheck.h"
 #include "VirtualPokewalker.h"
 
 namespace pokewalker::ir
@@ -161,6 +165,15 @@ struct State
     bool tcpRunning = false;
     u32 gamecode = 0;
     u32 irversion = 0;
+    // Screen trace for HG/SS (US), fed once per frame.
+    GameTrace trace;
+    std::vector<std::string> traceLines;
+    // Result of the last HG/SS copy check, cached per ROM image.
+    bool haveRomCheck = false;
+    RomCheckResult romCheck;
+    const u8* checkedRom = nullptr;
+    u32 checkedRomLen = 0;
+    u32 checkedGamecode = 0;
     // The log file has its own lock so the emulator core can write to it
     // without taking `lock` (lock order: lock, then logLock).
     std::mutex logLock;
@@ -171,6 +184,9 @@ struct State
     s64 coreWindowStart = 0;
     int coreWindowLines = 0;
 };
+
+std::atomic<bool> gTraceActive{false};
+std::atomic<bool> gTouching{false};
 
 State& S()
 {
@@ -321,13 +337,67 @@ void Configure(const Config& config)
     }
 }
 
-void OnCartReset(u32 gamecode, u32 irversion)
+void LogRomCheck(State& s, const RomCheckResult& r)
+{
+    std::string game = r.release.empty() ? "this release" : r.release;
+    switch (r.overlay)
+    {
+    case CopyState::Original:
+        WriteLog(s, "Game copy check: the Pokewalker program (overlay 112) of " + game + " is the original one");
+        break;
+    case CopyState::Different:
+        WriteLog(s, "Game copy check: the Pokewalker program (overlay 112) of " + game +
+                        " is MODIFIED (sha1 " + r.overlaySha1 + (r.detail.empty() ? "" : ", " + r.detail) +
+                        "). This copy was patched or hacked, so its Pokewalker screen may not work.");
+        break;
+    case CopyState::Missing:
+        WriteLog(s, "Game copy check: the Pokewalker program could not be read: " + r.detail);
+        break;
+    default:
+        WriteLog(s, "Game copy check: no reference for this release; Pokewalker program sha1 " + r.overlaySha1);
+        break;
+    }
+    if (r.rom == CopyState::Original)
+        WriteLog(s, "Game copy check: the whole ROM matches the original " + game + " release" +
+                        (r.romTrimmed ? " (the file was trimmed, which is harmless)" : ""));
+    else if (r.rom == CopyState::Different)
+        WriteLog(s, "Game copy check: the whole ROM differs from the original " + game + " release, sha1 " + r.romSha1);
+    else if (!r.romSha1.empty())
+        WriteLog(s, "Game copy check: ROM sha1 " + r.romSha1);
+    if (r.overlaysChecked)
+    {
+        if (r.differentOverlays.empty())
+            WriteLog(s, "Game copy check: the other " + std::to_string(r.overlaysChecked) + " program overlays are original");
+        else
+        {
+            std::string list;
+            for (size_t i = 0; i < r.differentOverlays.size() && i < 40; i++)
+            {
+                int id = r.differentOverlays[i];
+                if (i) list += ", ";
+                list += std::to_string(id);
+                const char* name = OverlayName(id);
+                if (*name) list += std::string(" (") + name + ")";
+            }
+            if (r.differentOverlays.size() > 40) list += ", ...";
+            WriteLog(s, "Game copy check: " + std::to_string(r.differentOverlays.size()) + " of the other " +
+                            std::to_string(r.overlaysChecked) + " program overlays differ from the original: " + list);
+        }
+        if (r.rom == CopyState::Different && r.overlay == CopyState::Original && r.differentOverlays.empty())
+            WriteLog(s, "Game copy check: every program overlay is original, so the difference is in the main program, "
+                        "the header or the game data");
+    }
+}
+
+void OnCartReset(u32 gamecode, u32 irversion, const u8* rom, u32 romlen)
 {
     State& s = S();
     std::lock_guard<std::mutex> guard(s.lock);
     s.gamecode = gamecode;
     s.irversion = irversion;
     s.walker.OnCartReset();
+    s.trace.Reset(gamecode);
+    gTraceActive = s.trace.Active();
     char code[5] = {(char)(gamecode & 0xFF), (char)((gamecode >> 8) & 0xFF), (char)((gamecode >> 16) & 0xFF), (char)(gamecode >> 24), 0};
     for (int i = 0; i < 4; i++)
         if (code[i] < 0x20 || code[i] > 0x7E) code[i] = '?';
@@ -337,6 +407,34 @@ void OnCartReset(u32 gamecode, u32 irversion)
     else if (!s.walker.IsOpen()) what = " (virtual Pokewalker could NOT be opened)";
     else what = " (virtual Pokewalker active)";
     WriteLog(s, std::string("Game loaded / reset, IR cartridge ") + code + what);
+
+    // Check HG/SS copies once per loaded image (later resets see the re-encrypted secure area).
+    if (IsPokewalkerGame(gamecode) && rom && romlen &&
+        (rom != s.checkedRom || romlen != s.checkedRomLen || gamecode != s.checkedGamecode))
+    {
+        s.romCheck = CheckPokewalkerRom(gamecode, rom, romlen);
+        s.haveRomCheck = true;
+        s.checkedRom = rom;
+        s.checkedRomLen = romlen;
+        s.checkedGamecode = gamecode;
+        LogRomCheck(s, s.romCheck);
+    }
+}
+
+void OnFrame(const u8* mainRam, u32 mainRamMask, u32 keyInput)
+{
+    if (!gTraceActive.load(std::memory_order_relaxed) || !mainRam) return;
+    State& s = S();
+    std::lock_guard<std::mutex> guard(s.lock);
+    s.traceLines.clear();
+    s.trace.OnFrame(mainRam, mainRamMask, keyInput, gTouching.load(std::memory_order_relaxed), &s.traceLines);
+    for (const std::string& line : s.traceLines) WriteLog(s, "[game] " + line);
+    if (!s.trace.Active()) gTraceActive = false;
+}
+
+void SetTouching(bool touching)
+{
+    gTouching.store(touching, std::memory_order_relaxed);
 }
 
 int OnGameSend(const u8* data, int len)
@@ -386,6 +484,15 @@ std::string StatusJson()
     // splice the IR mode in front of the walker fields
     std::string prefix = "{\"mode\":" + std::to_string((int)s.config.mode) + ",\"gameIsPokewalkerCompatible\":" +
                          (IsPokewalkerGame(s.gamecode) ? "true" : "false") + ",";
+    if (s.haveRomCheck)
+    {
+        const RomCheckResult& r = s.romCheck;
+        prefix += "\"romCheck\":{\"release\":\"" + JsonEscape(r.release) + "\",\"rom\":\"" + CopyStateName(r.rom) +
+                  "\",\"trimmed\":" + (r.romTrimmed ? "true" : "false") + ",\"overlay\":\"" + CopyStateName(r.overlay) +
+                  "\",\"otherOverlaysChecked\":" + std::to_string(r.overlaysChecked) +
+                  ",\"otherOverlaysDifferent\":" + std::to_string(r.differentOverlays.size()) + ",\"detail\":\"" +
+                  JsonEscape(r.detail) + "\"},";
+    }
     return prefix + json.substr(1);
 }
 

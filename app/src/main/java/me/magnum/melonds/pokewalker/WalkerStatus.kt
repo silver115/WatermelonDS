@@ -24,6 +24,8 @@ data class WalkerStatus(
     val caught: Int,
     val dowsed: Int,
     val gifted: Int,
+    /** Result of the HeartGold/SoulSilver copy check for the loaded game, if one ran. */
+    val copyCheck: CopyCheck?,
 ) {
     companion object {
         fun parse(json: String): WalkerStatus {
@@ -53,7 +55,37 @@ data class WalkerStatus(
                 caught = o.optInt("caught"),
                 dowsed = o.optInt("dowsed"),
                 gifted = o.optInt("gifted"),
+                copyCheck = o.optJSONObject("romCheck")?.let { c ->
+                    CopyCheck(
+                        release = c.optString("release"),
+                        rom = c.optString("rom"),
+                        trimmed = c.optBoolean("trimmed"),
+                        pokewalkerProgram = c.optString("overlay"),
+                        otherPartsChecked = c.optInt("otherOverlaysChecked"),
+                        otherPartsDifferent = c.optInt("otherOverlaysDifferent"),
+                        detail = c.optString("detail"),
+                    )
+                },
             )
         }
     }
+}
+
+/**
+ * Whether the loaded HeartGold/SoulSilver ROM matches the original release (checked by
+ * SHA-1 against the pret/pokeheartgold decompilation). States are "original",
+ * "different", "missing" or "unknown".
+ */
+data class CopyCheck(
+    val release: String,
+    val rom: String,
+    val trimmed: Boolean,
+    val pokewalkerProgram: String,
+    val otherPartsChecked: Int,
+    val otherPartsDifferent: Int,
+    val detail: String,
+) {
+    val known: Boolean get() = release.isNotBlank()
+    val pokewalkerProgramModified: Boolean get() = pokewalkerProgram == "different" || pokewalkerProgram == "missing"
+    val modified: Boolean get() = pokewalkerProgramModified || rom == "different" || otherPartsDifferent > 0
 }

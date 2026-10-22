@@ -30,6 +30,8 @@ jobs:
           cmake --build build/pokewalker-tests -j
           ./build/pokewalker-tests/walker_test
           ./build/pokewalker-tests/hgss_flow_test
+          ./build/pokewalker-tests/rom_check_test
+          ./build/pokewalker-tests/game_trace_test
 
   apk:
     name: APK (arm64)

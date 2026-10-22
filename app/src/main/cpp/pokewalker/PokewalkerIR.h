@@ -35,9 +35,16 @@ struct Config
 void Configure(const Config& config);
 
 // Called from the emulator thread through melonDS::Platform.
-void OnCartReset(u32 gamecode, u32 irversion);
+/// `rom`/`romlen` may be null/0; when given, HG/SS copies are checked once per image.
+void OnCartReset(u32 gamecode, u32 irversion, const u8* rom = nullptr, u32 romlen = 0);
 int OnGameSend(const u8* data, int len);
 int OnGamePoll(u8* out, int maxLen);
+
+/// Called by the frontend after every emulated frame with the DS main RAM and
+/// melonDS's KeyInput, to trace HG/SS screens into the log. Cheap when inactive.
+void OnFrame(const u8* mainRam, u32 mainRamMask, u32 keyInput);
+/// The frontend reports touch-screen presses here (any thread).
+void SetTouching(bool touching);
 
 // Virtual walker operations for the UI. Return false and set error on failure.
 std::string StatusJson();

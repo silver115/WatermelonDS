@@ -168,6 +168,11 @@ class PokewalkerPreferencesFragment : BasePreferenceFragment(), PreferenceFragme
                     statusPreference.summary = getString(R.string.pokewalker_status_unpaired)
                 }
             }
+            val copyText = Pokewalker.copyCheckText(requireContext(), status?.copyCheck)
+            if (copyText != null) {
+                val current = statusPreference.summary?.toString()
+                statusPreference.summary = if (current.isNullOrBlank()) copyText else "$current\n\n$copyText"
+            }
         }
     }
 

@@ -50,11 +50,13 @@ add_library(
         ${ANDROID-CPP}/PlatformAndroid.cpp
         ${ANDROID-CPP}/PlatformAndroid_AAC.cpp
         ${ANDROID-CPP}/pokewalker/EepromStore.cpp
+        ${ANDROID-CPP}/pokewalker/GameTrace.cpp
         ${ANDROID-CPP}/pokewalker/PlatformIR.cpp
         ${ANDROID-CPP}/pokewalker/PokewalkerIR.cpp
         ${ANDROID-CPP}/pokewalker/PokewalkerJNI.cpp
         ${ANDROID-CPP}/pokewalker/PwProtocol.cpp
         ${ANDROID-CPP}/pokewalker/PwText.cpp
+        ${ANDROID-CPP}/pokewalker/RomCheck.cpp
         ${ANDROID-CPP}/pokewalker/VirtualPokewalker.cpp
         ${ANDROID-CPP}/RetroAchievementsMapper.cpp
         ${ANDROID-CPP}/RewindManager.cpp

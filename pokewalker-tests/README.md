@@ -30,6 +30,22 @@ registered, Pokémon present, other game version or trainer).
 ./build/pokewalker-tests/hgss_flow_test
 ```
 
+## rom_check_test (runs in CI)
+
+The HeartGold/SoulSilver copy check (`RomCheck.cpp`): SHA-1 known answers, the
+NitroSDK backward-LZ decompressor (against a blob made by the decompilation's
+`compstatic`), and finding and decompressing every ARM9 overlay through the
+header, overlay table and FAT of a synthetic ROM, including trimmed, padded and
+damaged images. The reference hashes are the decompilation's `rom.sha1` and
+`main.sha1` for the US releases.
+
+## game_trace_test (runs in CI)
+
+The screen trace (`GameTrace.cpp`) on a simulated DS main RAM laid out like the
+game's (`_02111868` in `src/main.c`, `OverlayManager`, overlay 112's data):
+main menu, Pokéwalker screen steps, title screen, buttons and touches, an
+unexpected program in memory, unrecognised memory and the line limit.
+
 ## cart_ir_test (manual)
 
 Drives the real melonDS `CartRetailIR` SPI code (`0x01`/`0x02`/`0x08`) through
@@ -45,6 +61,7 @@ ninja -C build/core core
 P=app/src/main/cpp/pokewalker
 g++ -std=c++17 -ImelonDS-android-lib/src -Ibuild/core/src -I$P pokewalker-tests/cart_ir_test.cpp \
   $P/PokewalkerIR.cpp $P/PlatformIR.cpp $P/VirtualPokewalker.cpp $P/EepromStore.cpp $P/PwProtocol.cpp $P/PwText.cpp \
+  $P/RomCheck.cpp $P/GameTrace.cpp \
   -Wl,--start-group build/core/src/libcore.a build/core/src/teakra/src/libteakra.a -Wl,--end-group \
   -Wl,--unresolved-symbols=ignore-all -lpthread -o cart_ir_test && ./cart_ir_test
 ```

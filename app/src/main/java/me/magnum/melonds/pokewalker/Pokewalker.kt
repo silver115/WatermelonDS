@@ -2,7 +2,11 @@ package me.magnum.melonds.pokewalker
 
 import android.content.Context
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import android.widget.Toast
+import me.magnum.melonds.R
 import androidx.preference.PreferenceManager
 import java.io.File
 import java.text.DateFormat
@@ -76,6 +80,41 @@ object Pokewalker {
     }
 
     fun status(): WalkerStatus = WalkerStatus.parse(PokewalkerNative.getStatusJson())
+
+    /** One sentence describing [check], or null when there is nothing to compare against. */
+    fun copyCheckText(context: Context, check: CopyCheck?): String? {
+        if (check == null || !check.known) return null
+        return when {
+            check.pokewalkerProgramModified -> context.getString(R.string.pokewalker_copy_program_modified, check.release)
+            check.otherPartsDifferent > 0 -> context.getString(
+                R.string.pokewalker_copy_parts_modified,
+                check.release,
+                check.otherPartsDifferent,
+                check.otherPartsChecked + 1,
+            )
+            check.rom == "different" -> context.getString(R.string.pokewalker_copy_rom_modified, check.release)
+            check.rom == "original" && check.trimmed -> context.getString(R.string.pokewalker_copy_original_trimmed, check.release)
+            check.rom == "original" -> context.getString(R.string.pokewalker_copy_original, check.release)
+            else -> null
+        }
+    }
+
+    /**
+     * Called once a game has started: when HeartGold/SoulSilver turns out to be a modified
+     * copy, says so right away, because the game's own Pokéwalker screen may then fail.
+     */
+    fun announceCopyCheck(context: Context) {
+        try {
+            val check = status().copyCheck ?: return
+            if (!check.modified) return
+            val text = copyCheckText(context, check) ?: return
+            Handler(Looper.getMainLooper()).post {
+                Toast.makeText(context.applicationContext, text, Toast.LENGTH_LONG).show()
+            }
+        } catch (e: Throwable) {
+            Log.e(TAG, "Could not report the game check", e)
+        }
+    }
 }
 
 /**

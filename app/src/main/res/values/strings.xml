@@ -666,6 +666,11 @@
     <string name="pokewalker_status_walking_title">%1$s (Lv. %2$d) · %3$s</string>
     <string name="pokewalker_status_walking">Today: %1$s steps · Total: %2$s · %3$s W\nFound so far: %4$d Pokémon, %5$d items</string>
     <string name="pokewalker_status_since">On a stroll since %1$s</string>
+    <string name="pokewalker_copy_original">Game check: your %1$s copy is the original release.</string>
+    <string name="pokewalker_copy_original_trimmed">Game check: your %1$s copy is the original release (trimmed, which is fine).</string>
+    <string name="pokewalker_copy_program_modified">Game check: your %1$s copy is MODIFIED. Its Pokéwalker program differs from the original, so the in-game Pokéwalker screen may not work. Use an unmodified copy of the game.</string>
+    <string name="pokewalker_copy_parts_modified">Game check: your %1$s copy is modified (%2$d of %3$d program parts differ from the original). Its Pokéwalker program itself is the original one.</string>
+    <string name="pokewalker_copy_rom_modified">Game check: your %1$s copy differs from the original release outside its programs (main program, header or game data). Its Pokéwalker program is the original one.</string>
     <string name="pokewalker_category_play">On the Pokéwalker</string>
     <string name="pokewalker_radar">Poké Radar (10 W)</string>
     <string name="pokewalker_radar_summary">Look for a wild Pokémon on this route. Rarer ones show up after more steps today. Up to 3 per stroll.</string>
