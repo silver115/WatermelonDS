@@ -330,6 +330,34 @@ bool ImportImage(const std::vector<u8>& image, std::string* error)
     return s.walker.ImportImage(image, error);
 }
 
+bool RadarEncounter(int* slot, std::string* json, std::string* error)
+{
+    State& s = S();
+    std::lock_guard<std::mutex> guard(s.lock);
+    return s.walker.RadarEncounter(slot, json, error);
+}
+
+bool StoreCaught(int slot, std::string* error)
+{
+    State& s = S();
+    std::lock_guard<std::mutex> guard(s.lock);
+    return s.walker.StoreCaught(slot, error);
+}
+
+bool DowsingStart(u16* item, std::string* json, std::string* error)
+{
+    State& s = S();
+    std::lock_guard<std::mutex> guard(s.lock);
+    return s.walker.DowsingStart(item, json, error);
+}
+
+bool StoreDowsed(u16 item, std::string* error)
+{
+    State& s = S();
+    std::lock_guard<std::mutex> guard(s.lock);
+    return s.walker.StoreDowsed(item, error);
+}
+
 bool ExportImage(std::vector<u8>* image, std::string* error)
 {
     State& s = S();

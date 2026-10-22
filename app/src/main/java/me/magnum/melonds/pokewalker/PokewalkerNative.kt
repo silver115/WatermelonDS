@@ -26,4 +26,16 @@ object PokewalkerNative {
     external fun importImage(data: ByteArray): String?
 
     external fun exportImage(): ByteArray?
+
+    /** Poké Radar (10 W): JSON {slot, species, speciesName, level, watts}, or {error}. */
+    external fun radarEncounter(): String
+
+    /** Keeps route Pokémon [slot] as caught. Returns null on success, otherwise an error message. */
+    external fun storeCaught(slot: Int): String?
+
+    /** Dowsing (3 W): JSON {item, itemName, watts}, or {error}. */
+    external fun dowsingStart(): String
+
+    /** Keeps a dowsed item. Returns null on success, otherwise an error message. */
+    external fun storeDowsed(item: Int): String?
 }

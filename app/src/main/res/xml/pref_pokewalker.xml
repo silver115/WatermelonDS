@@ -15,6 +15,25 @@
     </PreferenceCategory>
 
     <PreferenceCategory
+            android:title="@string/pokewalker_category_play"
+            app:iconSpaceReserved="false">
+
+        <Preference
+                android:key="pokewalker_radar"
+                android:title="@string/pokewalker_radar"
+                android:summary="@string/pokewalker_radar_summary"
+                android:persistent="false"
+                app:iconSpaceReserved="false" />
+
+        <Preference
+                android:key="pokewalker_dowsing"
+                android:title="@string/pokewalker_dowsing"
+                android:summary="@string/pokewalker_dowsing_summary"
+                android:persistent="false"
+                app:iconSpaceReserved="false" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
             android:title="@string/pokewalker_category_steps"
             app:iconSpaceReserved="false">
 

@@ -216,6 +216,23 @@ static std::vector<u8> RouteInfo()
     std::memcpy(&r[0x10], nick.data(), 22);
     std::vector<u8> route = GameText("Refreshing Field", 21);
     std::memcpy(&r[0x28], route.data(), 42);
+    // route Pokémon: slot 0 rare (needs 3000 steps, 10%), slot 1 (500 steps, 30%), slot 2 common
+    const u16 species[3] = {179, 16, 19};   // Mareep, Pidgey, Rattata
+    const u16 steps[3] = {3000, 500, 0};
+    const u8 percent[3] = {10, 30, 100};
+    for (int i = 0; i < 3; i++)
+    {
+        wr16le(&r[0x52 + i * 16], species[i]);
+        r[0x52 + i * 16 + 0x0C] = (u8)(8 + i);
+        wr16le(&r[0x82 + i * 2], steps[i]);
+        r[0x88 + i] = percent[i];
+    }
+    for (int i = 0; i < 10; i++)
+    {
+        wr16le(&r[0x8C + i * 2], (u16)(17 + i));       // Potion, Antidote, ...
+        wr16le(&r[0xA0 + i * 2], (u16)(i < 9 ? 1000 : 0));
+        r[0xB4 + i] = (u8)(i < 9 ? 5 : 100);
+    }
     return r;
 }
 
@@ -516,6 +533,66 @@ static void TestRealDump(const char* dumpPath)
     CHECK(!w.ImportImage(bad, &err));
 }
 
+static void TestMiniGames()
+{
+    std::printf("Poke Radar and dowsing\n");
+    FakeClock clk;
+    VirtualPokewalker w;
+    Setup(w, clk);
+    std::string err, json;
+    CHECK(w.Open(TempPath("games.bin"), &err));
+    int slot = -1;
+    u16 item = 0;
+    CHECK(!w.RadarEncounter(&slot, &json, &err));         // no stroll yet
+    CHECK(Contains(err, "stroll"));
+
+    bool ok = false;
+    PairAndStartWalk(w, clk, &ok);
+    if (!ok) return;
+    CHECK(!w.RadarEncounter(&slot, &json, &err));         // 0 W
+    CHECK(Contains(err, "watts"));
+
+    CHECK(w.AddSteps(400, 0, &err));                       // 20 W, today 400: only the common slot qualifies
+    CHECK(w.RadarEncounter(&slot, &json, &err));
+    CHECK_EQ(slot, 2);
+    CHECK(Contains(json, "\"speciesName\":\"Rattata\""));
+    CHECK(Contains(json, "\"watts\":10"));
+    CHECK(w.StoreCaught(slot, &err));
+
+    CHECK(w.DowsingStart(&item, &json, &err));             // today 400 < 1000: only the last item qualifies
+    CHECK_EQ(item, 26);
+    CHECK(Contains(json, "\"watts\":7"));
+    CHECK(w.StoreDowsed(item, &err));
+    CHECK(!w.StoreDowsed(999, &err));                      // not on this route
+
+    // more steps unlock the rarer slots; over many tries all appear
+    CHECK(w.AddSteps(5000, 0, &err));
+    int seen[3] = {0, 0, 0};
+    for (int i = 0; i < 20; i++)
+    {
+        if (!w.RadarEncounter(&slot, &json, &err)) break;
+        seen[slot]++;
+    }
+    CHECK(seen[0] > 0 && seen[1] > 0 && seen[2] > 0);
+
+    // catch slots fill up at three
+    CHECK(w.StoreCaught(0, &err));
+    CHECK(w.StoreCaught(1, &err));
+    CHECK(!w.StoreCaught(2, &err));
+    CHECK(!w.RadarEncounter(&slot, &json, &err));
+    CHECK(Contains(err, "3 Pokemon"));
+    std::string st = w.StatusJson();
+    CHECK(Contains(st, "\"caught\":3"));
+    CHECK(Contains(st, "\"dowsed\":1"));
+
+    // what the game reads back on return: species in the caught area
+    std::vector<u8> img = w.ExportImage();
+    CHECK_EQ(rd16le(&img[0xCE8C]), 19);
+    CHECK_EQ(rd16le(&img[0xCE8C + 16]), 179);
+    CHECK_EQ(rd16le(&img[0xCE8C + 32]), 16);
+    CHECK_EQ(rd16le(&img[0xCEBC]), 26);
+}
+
 int main(int argc, char** argv)
 {
     TestChecksumVectors();
@@ -524,6 +601,7 @@ int main(int argc, char** argv)
     TestFullStroll();
     TestDaysAndCaps();
     TestRobustness();
+    TestMiniGames();
     TestRealDump(argc > 1 ? argv[1] : "pokewalker-dump.bin");
     std::printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

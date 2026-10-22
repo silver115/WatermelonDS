@@ -137,6 +137,13 @@ constexpr u16 Nickname = 0x10;          // 11 x u16
 constexpr u16 Happiness = 0x26;
 constexpr u16 ImageIndex = 0x27;
 constexpr u16 Name = 0x28;              // 21 x u16
+constexpr u16 Pokemon = 0x52;           // 3 x PokemonSummary (16 bytes)
+constexpr u16 PokemonSteps = 0x82;      // 3 x u16 le, steps needed today before it can appear
+constexpr u16 PokemonPercent = 0x88;    // 3 x u8, chance once the steps are met
+constexpr u16 Items = 0x8C;             // 10 x u16 le
+constexpr u16 ItemSteps = 0xA0;         // 10 x u16 le
+constexpr u16 ItemPercent = 0xB4;       // 10 x u8
+constexpr u16 Size = 0xBE;
 }
 
 // ---- game rules ------------------------------------------------------------

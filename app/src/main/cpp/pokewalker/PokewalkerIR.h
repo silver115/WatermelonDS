@@ -46,6 +46,12 @@ bool ResetWalker(std::string* error);
 bool ImportImage(const std::vector<u8>& image, std::string* error);
 bool ExportImage(std::vector<u8>* image, std::string* error);
 
+// The walker's own games.
+bool RadarEncounter(int* slot, std::string* json, std::string* error);
+bool StoreCaught(int slot, std::string* error);
+bool DowsingStart(u16* item, std::string* json, std::string* error);
+bool StoreDowsed(u16 item, std::string* error);
+
 /// True for Pokémon HeartGold / SoulSilver game codes (IPK* / IPG*).
 bool IsPokewalkerGame(u32 gamecode);
 

@@ -80,6 +80,50 @@ Java_me_magnum_melonds_pokewalker_PokewalkerNative_importImage(JNIEnv* env, jobj
     return ErrorOrNull(env, ok, error);
 }
 
+static jstring JsonOrError(JNIEnv* env, bool ok, const std::string& json, const std::string& error)
+{
+    if (ok) return env->NewStringUTF(json.c_str());
+    std::string out = "{\"error\":\"";
+    for (char c : error) out += (c == '"' || c == '\\') ? '\'' : c;
+    out += "\"}";
+    return env->NewStringUTF(out.c_str());
+}
+
+JNIEXPORT jstring JNICALL
+Java_me_magnum_melonds_pokewalker_PokewalkerNative_radarEncounter(JNIEnv* env, jobject)
+{
+    int slot = -1;
+    std::string json, error;
+    bool ok = pokewalker::ir::RadarEncounter(&slot, &json, &error);
+    return JsonOrError(env, ok, json, error);
+}
+
+JNIEXPORT jstring JNICALL
+Java_me_magnum_melonds_pokewalker_PokewalkerNative_storeCaught(JNIEnv* env, jobject, jint slot)
+{
+    std::string error;
+    bool ok = pokewalker::ir::StoreCaught(slot, &error);
+    return ErrorOrNull(env, ok, error);
+}
+
+JNIEXPORT jstring JNICALL
+Java_me_magnum_melonds_pokewalker_PokewalkerNative_dowsingStart(JNIEnv* env, jobject)
+{
+    pokewalker::u16 item = 0;
+    std::string json, error;
+    bool ok = pokewalker::ir::DowsingStart(&item, &json, &error);
+    return JsonOrError(env, ok, json, error);
+}
+
+JNIEXPORT jstring JNICALL
+Java_me_magnum_melonds_pokewalker_PokewalkerNative_storeDowsed(JNIEnv* env, jobject, jint item)
+{
+    std::string error;
+    bool ok = item > 0 && item <= 0xFFFF && pokewalker::ir::StoreDowsed(static_cast<pokewalker::u16>(item), &error);
+    if (!(item > 0 && item <= 0xFFFF)) error = "invalid item";
+    return ErrorOrNull(env, ok, error);
+}
+
 JNIEXPORT jbyteArray JNICALL
 Java_me_magnum_melonds_pokewalker_PokewalkerNative_exportImage(JNIEnv* env, jobject)
 {

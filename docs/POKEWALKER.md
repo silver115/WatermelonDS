@@ -38,6 +38,18 @@ credited once, with the highest number seen.
 | **Samsung Health export** | On your phone: Samsung Health → Settings → *Download personal data*. Copy the zip to the Thor (Quick Share, Google Drive, USB). Then *Import a step export*. | Works offline. Import a newer export any time; already-counted steps are skipped. Any CSV with `date` and `steps` columns works too. |
 | **Manual** | *Add steps manually* | Type the number your phone shows. |
 
+## Poké Radar and dowsing
+
+Spend watts like on the real Pokéwalker, in Settings → Pokéwalker → *On the Pokéwalker*:
+
+- **Poké Radar (10 W):** a route Pokémon appears. Which one follows the walker's
+  own rules: the rarer ones need more steps *today*. Throw a Poké Ball to catch
+  it. Rarer ones get away more often. Up to 3 per stroll.
+- **Dowsing (3 W):** pick one of six grass patches, two tries, with a hint after
+  a miss. Up to 3 items per stroll.
+
+Everything you catch or find comes back to the game when the Pokémon returns.
+
 ## Bring the Pokémon home
 
 In the game choose **return the Pokémon**. The game receives the steps (the
@@ -55,8 +67,12 @@ comes back too, as on the real device.
 
 ## Limits
 
-- The Pokéwalker's own mini-games (Poké Radar, dowsing) aren't playable in
-  the app yet. Strolls, steps, watts, pairing and returning are.
+- Poké Radar and dowsing are simplified versions: one Poké Ball throw instead
+  of the attack/evade battle, and a list of grass patches instead of the
+  walker's screen. They use the same encounter rules and storage, so the game
+  imports the results normally.
+- Special event routes and event Pokémon from Nintendo distributions aren't
+  supported.
 - Only HeartGold and SoulSilver get the virtual walker. Other IR games
   (Black/White, B2/W2) are left alone.
 - The Health Connect route depends on another app putting your phone's steps

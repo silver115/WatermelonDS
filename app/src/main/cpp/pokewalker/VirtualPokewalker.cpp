@@ -442,6 +442,168 @@ std::string VirtualPokewalker::StatusJson()
 }
 
 // ---------------------------------------------------------------------------
+// Poké Radar and dowsing
+// ---------------------------------------------------------------------------
+
+bool VirtualPokewalker::CheckPlayable(u32 cost, std::string* error)
+{
+    if (!IsOpen()) { if (error) *error = "the virtual Pokewalker is not open"; return false; }
+    if (SessionActive()) { if (error) *error = "the game is connected to the Pokewalker right now"; return false; }
+    Identity ident = ReadIdentity();
+    if (!(ident[id::Flags] & id::FlagHasPokemon)) { if (error) *error = "no Pokemon is on a stroll"; return false; }
+    Health h = ReadHealth();
+    if (rd16be(&h[hd::Watts]) < cost)
+    {
+        if (error) *error = "not enough watts (" + std::to_string(cost) + " W needed)";
+        return false;
+    }
+    return true;
+}
+
+void VirtualPokewalker::SpendWatts(u32 cost)
+{
+    Health h = ReadHealth();
+    u32 watts = rd16be(&h[hd::Watts]);
+    watts = watts >= cost ? watts - cost : 0;
+    wr16be(&h[hd::Watts], (u16)watts);
+    WriteHealth(h);
+    WriteWattsMirror((u16)watts);
+    store.Sync();
+}
+
+int VirtualPokewalker::FreeSlot(u32 base, int count, int stride) const
+{
+    for (int i = 0; i < count; i++)
+    {
+        u8 raw[2];
+        store.Read(base + (u32)(i * stride), raw, 2);
+        u16 v = rd16le(raw);
+        if (v == 0 || v == 0xFFFF) return i;
+    }
+    return -1;
+}
+
+bool VirtualPokewalker::RadarEncounter(int* slot, std::string* json, std::string* error)
+{
+    if (IsOpen() && !SessionActive()) RollOverDay();
+    if (!CheckPlayable(RadarCost, error)) return false;
+    if (FreeSlot(ee::Caught, ee::CaughtCount, 16) < 0)
+    {
+        if (error) *error = "you already caught 3 Pokemon on this stroll, bring them home first";
+        return false;
+    }
+
+    u8 ri[route::Size];
+    store.Read(ee::RouteInfo, ri, sizeof(ri));
+    u32 today = rd32be(&ReadHealth()[hd::TodaySteps]);
+    u32 roll = rng() % 100;
+
+    int chosen = -1, fallback = -1;
+    for (int i = 0; i < 3; i++)
+    {
+        u16 species = rd16le(&ri[route::Pokemon + i * 16]);
+        if (species == 0 || species == 0xFFFF) continue;
+        fallback = i;
+        u16 steps = rd16le(&ri[route::PokemonSteps + i * 2]);
+        u8 percent = ri[route::PokemonPercent + i];
+        if (chosen < 0 && today >= steps && roll <= percent) chosen = i;
+    }
+    if (chosen < 0) chosen = fallback;
+    if (chosen < 0)
+    {
+        if (error) *error = "this route has no Pokemon";
+        return false;
+    }
+
+    SpendWatts(RadarCost);
+    const u8* mon = &ri[route::Pokemon + chosen * 16];
+    u16 species = rd16le(mon);
+    *slot = chosen;
+    std::ostringstream js;
+    js << "{\"slot\":" << chosen << ",\"species\":" << species
+       << ",\"speciesName\":\"" << JsonEscape(SpeciesName(species)) << "\""
+       << ",\"level\":" << (int)mon[route::Level]
+       << ",\"watts\":" << rd16be(&ReadHealth()[hd::Watts]) << "}";
+    *json = js.str();
+    Log(std::string("Poke Radar found ") + SpeciesName(species));
+    return true;
+}
+
+bool VirtualPokewalker::StoreCaught(int slot, std::string* error)
+{
+    if (!CheckPlayable(0, error)) return false;
+    if (slot < 0 || slot > 2) { if (error) *error = "invalid route slot"; return false; }
+    int free = FreeSlot(ee::Caught, ee::CaughtCount, 16);
+    if (free < 0) { if (error) *error = "you already caught 3 Pokemon on this stroll"; return false; }
+    u8 mon[16];
+    store.Read(ee::RouteInfo + route::Pokemon + (u32)slot * 16, mon, sizeof(mon));
+    store.Write(ee::Caught + (u32)free * 16, mon, sizeof(mon));
+    store.Sync();
+    Log(std::string("Caught ") + SpeciesName(rd16le(mon)));
+    return true;
+}
+
+bool VirtualPokewalker::DowsingStart(u16* item, std::string* json, std::string* error)
+{
+    if (IsOpen() && !SessionActive()) RollOverDay();
+    if (!CheckPlayable(DowsingCost, error)) return false;
+    if (FreeSlot(ee::Dowsed, ee::DowsedCount, 4) < 0)
+    {
+        if (error) *error = "you already found 3 items on this stroll, bring them home first";
+        return false;
+    }
+
+    u8 ri[route::Size];
+    store.Read(ee::RouteInfo, ri, sizeof(ri));
+    u32 today = rd32be(&ReadHealth()[hd::TodaySteps]);
+    u32 roll = rng() % 100;
+
+    int chosen = -1, fallback = -1;
+    for (int i = 0; i < 10; i++)
+    {
+        u16 id = rd16le(&ri[route::Items + i * 2]);
+        if (id == 0 || id == 0xFFFF) continue;
+        fallback = i;
+        u16 steps = rd16le(&ri[route::ItemSteps + i * 2]);
+        u8 percent = ri[route::ItemPercent + i];
+        if (chosen < 0 && today >= steps && roll < percent) chosen = i;
+    }
+    if (chosen < 0) chosen = fallback;
+    if (chosen < 0)
+    {
+        if (error) *error = "this route has no items";
+        return false;
+    }
+
+    SpendWatts(DowsingCost);
+    *item = rd16le(&ri[route::Items + chosen * 2]);
+    std::ostringstream js;
+    js << "{\"item\":" << *item << ",\"itemName\":\"" << JsonEscape(ItemName(*item)) << "\""
+       << ",\"watts\":" << rd16be(&ReadHealth()[hd::Watts]) << "}";
+    *json = js.str();
+    return true;
+}
+
+bool VirtualPokewalker::StoreDowsed(u16 item, std::string* error)
+{
+    if (!CheckPlayable(0, error)) return false;
+    u8 ri[route::Size];
+    store.Read(ee::RouteInfo, ri, sizeof(ri));
+    bool onRoute = false;
+    for (int i = 0; i < 10; i++)
+        if (item != 0 && rd16le(&ri[route::Items + i * 2]) == item) onRoute = true;
+    if (!onRoute) { if (error) *error = "that item is not on this route"; return false; }
+    int free = FreeSlot(ee::Dowsed, ee::DowsedCount, 4);
+    if (free < 0) { if (error) *error = "you already found 3 items on this stroll"; return false; }
+    u8 entry[4] = {0, 0, 0, 0};
+    wr16le(entry, item);
+    store.Write(ee::Dowsed + (u32)free * 4, entry, sizeof(entry));
+    store.Sync();
+    Log(std::string("Found ") + ItemName(item));
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // Air interface
 // ---------------------------------------------------------------------------
 

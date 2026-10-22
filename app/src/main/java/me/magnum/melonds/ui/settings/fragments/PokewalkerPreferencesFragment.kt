@@ -28,7 +28,10 @@ import me.magnum.melonds.pokewalker.StepFileImporter
 import me.magnum.melonds.pokewalker.StepLedger
 import me.magnum.melonds.pokewalker.WalkerStatus
 import me.magnum.melonds.ui.settings.PreferenceFragmentTitleProvider
+import org.json.JSONObject
 import java.text.NumberFormat
+import kotlin.math.abs
+import kotlin.random.Random
 
 class PokewalkerPreferencesFragment : BasePreferenceFragment(), PreferenceFragmentTitleProvider {
 
@@ -75,6 +78,14 @@ class PokewalkerPreferencesFragment : BasePreferenceFragment(), PreferenceFragme
 
         findPreference<Preference>("pokewalker_status")?.setOnPreferenceClickListener {
             refreshStatus()
+            true
+        }
+        findPreference<Preference>("pokewalker_radar")?.setOnPreferenceClickListener {
+            playRadar()
+            true
+        }
+        findPreference<Preference>("pokewalker_dowsing")?.setOnPreferenceClickListener {
+            playDowsing()
             true
         }
         findPreference<Preference>("pokewalker_sync_health_connect")?.setOnPreferenceClickListener {
@@ -292,6 +303,101 @@ class PokewalkerPreferencesFragment : BasePreferenceFragment(), PreferenceFragme
             is CreditResult.Error -> toast(getString(R.string.pokewalker_error, credit.message))
         }
         refreshStatus()
+    }
+
+    // ---- Poké Radar and dowsing -----------------------------------------------------
+
+    private fun playRadar() {
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { JSONObject(PokewalkerNative.radarEncounter()) }.getOrNull() }
+            if (!isAdded) return@launch
+            refreshStatus()
+            if (result == null) {
+                toast(getString(R.string.pokewalker_error, "?"))
+                return@launch
+            }
+            val error = result.optString("error")
+            if (error.isNotEmpty()) {
+                toast(getString(R.string.pokewalker_error, error))
+                return@launch
+            }
+            val slot = result.optInt("slot")
+            val name = result.optString("speciesName").ifBlank { "?" }
+            val level = result.optInt("level")
+            AlertDialog.Builder(requireContext())
+                .setTitle(R.string.pokewalker_radar)
+                .setMessage(getString(R.string.pokewalker_radar_appeared, name, level))
+                .setPositiveButton(R.string.pokewalker_radar_throw) { _, _ -> throwBall(slot, name) }
+                .setNegativeButton(R.string.pokewalker_radar_run) { _, _ -> toast(getString(R.string.pokewalker_radar_ran, name)) }
+                .setCancelable(false)
+                .show()
+        }
+    }
+
+    private fun throwBall(slot: Int, name: String) {
+        // Rarer route Pokémon (lower slots) are harder to catch, as on the Pokéwalker.
+        val chance = when (slot) {
+            0 -> 0.5
+            1 -> 0.6
+            else -> 0.75
+        }
+        if (Random.nextDouble() >= chance) {
+            toast(getString(R.string.pokewalker_radar_fled, name))
+            return
+        }
+        lifecycleScope.launch {
+            val error = withContext(Dispatchers.IO) { runCatching { PokewalkerNative.storeCaught(slot) }.getOrElse { it.message ?: "?" } }
+            if (!isAdded) return@launch
+            toast(if (error == null) getString(R.string.pokewalker_radar_caught, name) else getString(R.string.pokewalker_error, error))
+            refreshStatus()
+        }
+    }
+
+    private fun playDowsing() {
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { JSONObject(PokewalkerNative.dowsingStart()) }.getOrNull() }
+            if (!isAdded) return@launch
+            refreshStatus()
+            if (result == null) {
+                toast(getString(R.string.pokewalker_error, "?"))
+                return@launch
+            }
+            val error = result.optString("error")
+            if (error.isNotEmpty()) {
+                toast(getString(R.string.pokewalker_error, error))
+                return@launch
+            }
+            val item = result.optInt("item")
+            val itemName = result.optString("itemName").ifBlank { getString(R.string.pokewalker_item_unknown) }
+            showGrass(item, itemName, hidden = Random.nextInt(6), triesLeft = 2, title = null)
+        }
+    }
+
+    private fun showGrass(item: Int, itemName: String, hidden: Int, triesLeft: Int, title: String?) {
+        val patches = Array<CharSequence>(6) { getString(R.string.pokewalker_dowsing_bush, it + 1) }
+        AlertDialog.Builder(requireContext())
+            .setTitle(title ?: getString(R.string.pokewalker_dowsing_title, triesLeft))
+            .setItems(patches) { _, which ->
+                when {
+                    which == hidden -> claimItem(item, itemName)
+                    triesLeft > 1 -> {
+                        val hint = if (abs(which - hidden) == 1) R.string.pokewalker_dowsing_close else R.string.pokewalker_dowsing_far
+                        showGrass(item, itemName, hidden, triesLeft - 1, getString(hint, triesLeft - 1))
+                    }
+                    else -> toast(getString(R.string.pokewalker_dowsing_nothing))
+                }
+            }
+            .setCancelable(false)
+            .show()
+    }
+
+    private fun claimItem(item: Int, itemName: String) {
+        lifecycleScope.launch {
+            val error = withContext(Dispatchers.IO) { runCatching { PokewalkerNative.storeDowsed(item) }.getOrElse { it.message ?: "?" } }
+            if (!isAdded) return@launch
+            toast(if (error == null) getString(R.string.pokewalker_dowsing_found, itemName) else getString(R.string.pokewalker_error, error))
+            refreshStatus()
+        }
     }
 
     // ---- walker data ----------------------------------------------------------------

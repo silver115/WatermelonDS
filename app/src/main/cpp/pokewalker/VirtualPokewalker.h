@@ -65,6 +65,20 @@ public:
     bool ImportImage(const std::vector<u8>& image, std::string* error);
     std::vector<u8> ExportImage() const;
 
+    // ---- the walker's own games, played from the app -----------------------------------
+    static constexpr u32 RadarCost = 10;
+    static constexpr u32 DowsingCost = 3;
+    /// Poké Radar: spends 10 W and picks which route Pokémon appears, using the
+    /// walker's rules (today's steps against each slot's requirement, then its
+    /// chance). Sets slot (0-2) and a JSON description of the encounter.
+    bool RadarEncounter(int* slot, std::string* json, std::string* error);
+    /// Keeps route Pokémon  in the first free catch slot (3 per stroll).
+    bool StoreCaught(int slot, std::string* error);
+    /// Dowsing: spends 3 W and picks the item hidden in the grass.
+    bool DowsingStart(u16* item, std::string* json, std::string* error);
+    /// Keeps a dowsed item in the first free item slot (3 per stroll).
+    bool StoreDowsed(u16 item, std::string* error);
+
     // ---- hooks for tests / platform integration ------------------------------------
     void SetClocks(MonotonicMs mono, UnixSeconds wall, LocalDayOf localDay);
     void SetLogger(Logger logger) { log = std::move(logger); }
@@ -130,6 +144,10 @@ private:
     void DoWalkStart(bool initAfterPairing);
     void DoWalkEnd();
     void DoReset(bool clearEvents, bool clearSteps);
+
+    bool CheckPlayable(u32 cost, std::string* error);
+    void SpendWatts(u32 cost);
+    int FreeSlot(u32 base, int count, int stride) const;
 };
 
 }

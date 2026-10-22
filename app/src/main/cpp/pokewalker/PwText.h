@@ -19,6 +19,9 @@ std::string DecodeGameText(const u8* data, size_t maxChars);
 /// English species name for a national dex number (1..493), or "" if unknown.
 const char* SpeciesName(u16 species);
 
+/// English Generation IV item name for an item id, or "" if unknown.
+const char* ItemName(u16 item);
+
 /// Escapes a string for inclusion in a JSON document.
 std::string JsonEscape(const std::string& s);
 
