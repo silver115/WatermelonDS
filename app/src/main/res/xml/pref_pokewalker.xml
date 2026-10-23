@@ -44,6 +44,20 @@
             android:title="@string/pokewalker_category_steps"
             app:iconSpaceReserved="false">
 
+        <SwitchPreference
+                android:key="pokewalker_auto_sync"
+                android:title="@string/pokewalker_auto_sync"
+                android:summary="@string/pokewalker_auto_sync_summary"
+                android:defaultValue="true"
+                app:iconSpaceReserved="false" />
+
+        <EditTextPreference
+                android:key="pokewalker_step_goal"
+                android:title="@string/pokewalker_step_goal"
+                android:defaultValue="10000"
+                android:inputType="number"
+                app:iconSpaceReserved="false" />
+
         <Preference
                 android:key="pokewalker_sync_health_connect"
                 android:title="@string/pokewalker_sync_health_connect"

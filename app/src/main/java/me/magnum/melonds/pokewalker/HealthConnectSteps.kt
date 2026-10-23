@@ -33,6 +33,12 @@ class HealthConnectSteps(private val context: Context) {
         return granted.containsAll(PERMISSIONS)
     }
 
+    /** Reading steps while no screen of the app is visible (newer Health Connect versions). */
+    suspend fun hasBackgroundPermission(): Boolean {
+        val granted = HealthConnectClient.getOrCreate(context).permissionController.getGrantedPermissions()
+        return granted.contains(READ_IN_BACKGROUND)
+    }
+
     /** Steps per local epoch day between [fromMillis] and [toMillis]. */
     suspend fun stepsByDay(fromMillis: Long, toMillis: Long = System.currentTimeMillis()): Map<Long, Long> {
         val client = HealthConnectClient.getOrCreate(context)
@@ -56,7 +62,9 @@ class HealthConnectSteps(private val context: Context) {
 
     companion object {
         const val READ_STEPS = "android.permission.health.READ_STEPS"
+        const val READ_IN_BACKGROUND = "android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND"
         val PERMISSIONS = setOf(READ_STEPS)
+        val BACKGROUND_PERMISSIONS = setOf(READ_STEPS, READ_IN_BACKGROUND)
         private const val PROVIDER_PACKAGE = "com.google.android.apps.healthdata"
 
         fun permissionContract(): ActivityResultContract<Set<String>, Set<String>> =

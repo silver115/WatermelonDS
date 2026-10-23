@@ -4,6 +4,14 @@
     <color name="pokewalker_device_background">#FF1D2230</color>
     <color name="pokewalker_device_icon_background">#FF2E8C7E</color>
 
+    <style name="PokewalkerTranslucentTheme" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
+
     <style name="PokewalkerDeviceTheme" parent="Theme.AppCompat.NoActionBar">
         <item name="android:windowBackground">@color/pokewalker_device_background</item>
         <item name="android:statusBarColor">@color/pokewalker_device_background</item>

@@ -53,4 +53,10 @@ object PokewalkerNative {
      * bits 8-9 volume (0-2), bits 12-15 shade (0-9).
      */
     external fun deviceFrame(frame: ByteArray): Int
+
+    /** The walker's own screen: jumps into one of its apps (0 Poké Radar, 1 Dowsing, 3 Trainer Card...). */
+    external fun deviceOpenApp(index: Int)
+
+    /** The walker's home screen for widgets (96x64 shades into [frame]). False if the walker isn't open. */
+    external fun widgetFrame(frame: ByteArray): Boolean
 }

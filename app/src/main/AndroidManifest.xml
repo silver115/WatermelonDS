@@ -15,6 +15,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- Pokéwalker step sync (only read when the user taps "Sync steps") -->
     <uses-permission android:name="android.permission.health.READ_STEPS" />
+    <!-- Pokéwalker: hourly step sync while no screen of the app is open (if Health Connect allows it) -->
+    <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND" />
 
     <!-- Health Connect needs Android 9+; the client library declares minSdk 26 and is only used on 28+. -->
     <uses-sdk tools:overrideLibrary="androidx.health.connect.client" />
@@ -193,6 +195,37 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- "Sync steps" from the widget and launcher shortcut: on screen just long enough to read steps. -->
+        <activity
+            android:name=".pokewalker.PokewalkerSyncActivity"
+            android:theme="@style/PokewalkerTranslucentTheme"
+            android:taskAffinity="${applicationId}.pokewalkersync"
+            android:excludeFromRecents="true"
+            android:exported="false" />
+
+        <receiver
+            android:name=".pokewalker.PokewalkerWidget"
+            android:label="@string/pokewalker_device_label"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/pokewalker_widget_info" />
+        </receiver>
+
+        <service
+            android:name=".pokewalker.PokewalkerTileService"
+            android:label="@string/pokewalker_device_label"
+            android:icon="@drawable/ic_pokewalker"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
         <activity
             android:name=".pokewalker.HealthPermissionsRationaleActivity"
             android:label="@string/pokewalker_health_privacy_title"

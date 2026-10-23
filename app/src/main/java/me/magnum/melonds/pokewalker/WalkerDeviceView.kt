@@ -4,7 +4,6 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
@@ -21,23 +20,16 @@ import kotlin.math.min
  * in a simple handheld body with three buttons (left, middle, right).
  */
 @SuppressLint("ViewConstructor")
-class WalkerDeviceView(context: Context, private val onButton: (Int) -> Unit) : View(context) {
+class WalkerDeviceView(context: Context, private val onButton: (Int) -> Unit) : View(context), WalkerSkin {
 
     companion object {
         const val LCD_WIDTH = 96
         const val LCD_HEIGHT = 64
-
-        // LCD shades, lightest to darkest, at the default shade setting (4).
-        private val BASE = intArrayOf(0xFFC6CDB6.toInt(), 0xFF8F987F.toInt(), 0xFF575F4B.toInt(), 0xFF20261B.toInt())
-
-        private fun mix(a: Int, b: Int, t: Float): Int {
-            val k = t.coerceIn(0f, 1f)
-            fun ch(shift: Int) = (((a shr shift) and 0xFF) * (1 - k) + ((b shr shift) and 0xFF) * k).toInt() and 0xFF
-            return Color.argb(255, ch(16), ch(8), ch(0))
-        }
     }
 
-    var shade = 4
+    override val view: View get() = this
+
+    override var shade = 4
         private set
 
     private val bitmap = Bitmap.createBitmap(LCD_WIDTH, LCD_HEIGHT, Bitmap.Config.ARGB_8888)
@@ -71,7 +63,7 @@ class WalkerDeviceView(context: Context, private val onButton: (Int) -> Unit) : 
     }
 
     /** New picture from the walker (shades 0-3) and the walker's shade setting. */
-    fun setFrame(frame: ByteArray, newShade: Int) {
+    override fun setFrame(frame: ByteArray, newShade: Int) {
         if (newShade != shade) {
             shade = newShade
             palette = paletteFor(newShade)
@@ -82,24 +74,14 @@ class WalkerDeviceView(context: Context, private val onButton: (Int) -> Unit) : 
     }
 
     /** Shows a hardware key press on the matching on-screen button. */
-    fun showPressed(button: Int, down: Boolean) {
+    override fun showPressed(button: Int, down: Boolean) {
         if (button in 0..2 && pressed[button] != down) {
             pressed[button] = down
             invalidate()
         }
     }
 
-    private fun paletteFor(shade: Int): IntArray {
-        // Shade 0 is the lightest picture, 9 the darkest; 4 is the walker's default.
-        val t = (shade - 4) / 5f
-        return IntArray(4) { i ->
-            when {
-                i == 0 -> BASE[0]
-                t >= 0 -> mix(BASE[i], 0xFF000000.toInt(), t * 0.55f)
-                else -> mix(BASE[i], BASE[0], -t * 0.6f)
-            }
-        }
-    }
+    private fun paletteFor(shade: Int): IntArray = LcdPalette.forShade(LcdPalette.CLASSIC, shade)
 
     private fun redrawBitmap() {
         for (i in pixels.indices) pixels[i] = palette[shades[i].toInt() and 3]

@@ -39,6 +39,7 @@ class MelonDSApplication : Application(), Configuration.Provider {
         performMigrations()
         MelonDSAndroidInterface.setup(UriFileHandler(this, uriHandler))
         me.magnum.melonds.pokewalker.Pokewalker.applySettings(this)
+        me.magnum.melonds.pokewalker.Pokewalker.onAppStarted(this)
     }
 
     private fun createNotificationChannels() {

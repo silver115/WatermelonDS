@@ -675,6 +675,29 @@ void TestCardInventorySettings()
     CHECK(r.Screen() == "menu");
 }
 
+void TestOpenApp()
+{
+    std::printf("opening an app directly (launcher shortcuts)\n");
+    Rig r;
+    r.device.OpenApp(1, r.ms);                        // unpaired: stays home
+    r.device.Update(r.ms);
+    CHECK(r.Screen() == "home");
+    r.Load(BuildWalker(r.factory, true, true, 50));
+    r.script = {2};
+    r.device.OpenApp(1, r.ms);
+    r.device.Update(r.ms);
+    CHECK(r.Screen() == "dowsing");
+    CHECK(Contains(r.Status(), "\"watts\":47"));
+    r.device.OpenApp(3, r.ms);                        // leaving a game half-way is fine
+    r.device.Update(r.ms);
+    CHECK(r.Screen() == "trainer card");
+    r.Center();
+    CHECK(r.Screen() == "menu");
+    CHECK(r.Shows(8, 0, 80, 16, 0x0910 + 3 * 320));   // back on the menu at that app
+    r.device.OpenApp(9, r.ms);                        // out of range: ignored
+    CHECK(r.Screen() == "menu");
+}
+
 void TestChangedFlag()
 {
     std::printf("redraw only when something changed\n");
@@ -698,6 +721,7 @@ int main()
     TestBattleOutcomes();
     TestDowsing();
     TestCardInventorySettings();
+    TestOpenApp();
     TestChangedFlag();
     std::printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

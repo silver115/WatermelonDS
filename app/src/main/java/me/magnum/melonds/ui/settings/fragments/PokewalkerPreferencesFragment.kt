@@ -26,6 +26,7 @@ import me.magnum.melonds.pokewalker.LocalDays
 import me.magnum.melonds.pokewalker.Pokewalker
 import me.magnum.melonds.pokewalker.PokewalkerDeviceActivity
 import me.magnum.melonds.pokewalker.PokewalkerNative
+import me.magnum.melonds.pokewalker.PokewalkerWidget
 import me.magnum.melonds.pokewalker.StepFileImporter
 import me.magnum.melonds.pokewalker.StepLedger
 import me.magnum.melonds.pokewalker.WalkerStatus
@@ -44,8 +45,21 @@ class PokewalkerPreferencesFragment : BasePreferenceFragment(), PreferenceFragme
             registerForActivityResult(HealthConnectSteps.permissionContract()) { granted ->
                 if (granted.containsAll(HealthConnectSteps.PERMISSIONS)) {
                     syncFromHealthConnect()
+                    context?.let { if (Pokewalker.autoSyncEnabled(it)) requestBackgroundAccess() }
                 } else {
                     toast(getString(R.string.pokewalker_health_permission_denied))
+                }
+            }
+        } else {
+            null
+        }
+
+    // Health Connect's "read in the background" access, for the hourly step sync.
+    private val backgroundPermissionLauncher: ActivityResultLauncher<Set<String>>? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            registerForActivityResult(HealthConnectSteps.permissionContract()) { granted ->
+                if (!granted.contains(HealthConnectSteps.READ_IN_BACKGROUND)) {
+                    toast(getString(R.string.pokewalker_auto_sync_no_background))
                 }
             }
         } else {
@@ -71,12 +85,43 @@ class PokewalkerPreferencesFragment : BasePreferenceFragment(), PreferenceFragme
             updateConnectionPreferences()
             refreshStatus()
         }
+        if (key == Pokewalker.KEY_AUTO_SYNC && context?.let { Pokewalker.autoSyncEnabled(it) } == true) {
+            requestBackgroundAccess()
+        }
+        if (key == Pokewalker.KEY_STEP_GOAL) {
+            updateGoalSummary()
+            context?.let { PokewalkerWidget.updateAll(it.applicationContext) }
+        }
+    }
+
+    private fun updateGoalSummary() {
+        val ctx = context ?: return
+        findPreference<EditTextPreference>(Pokewalker.KEY_STEP_GOAL)?.summary =
+            getString(R.string.pokewalker_step_goal_summary, numbers.format(Pokewalker.stepGoal(ctx)))
+    }
+
+    /** Asks Health Connect for background reading when it isn't granted yet (only if Health Connect is set up). */
+    private fun requestBackgroundAccess() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return
+        val healthConnect = HealthConnectSteps(requireContext().applicationContext)
+        if (healthConnect.availability() != HealthConnectSteps.Availability.AVAILABLE) return
+        lifecycleScope.launch {
+            val hasSteps = runCatching { healthConnect.hasPermission() }.getOrDefault(false)
+            val hasBackground = runCatching { healthConnect.hasBackgroundPermission() }.getOrDefault(false)
+            if (hasSteps && !hasBackground) {
+                launchSafely { backgroundPermissionLauncher?.launch(HealthConnectSteps.BACKGROUND_PERMISSIONS) }
+            }
+        }
     }
 
     override fun getTitle() = getString(R.string.pokewalker)
 
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
         setPreferencesFromResource(R.xml.pref_pokewalker, rootKey)
+        findPreference<EditTextPreference>(Pokewalker.KEY_STEP_GOAL)?.setOnBindEditTextListener {
+            it.inputType = InputType.TYPE_CLASS_NUMBER
+        }
+        updateGoalSummary()
 
         findPreference<Preference>("pokewalker_status")?.setOnPreferenceClickListener {
             refreshStatus()

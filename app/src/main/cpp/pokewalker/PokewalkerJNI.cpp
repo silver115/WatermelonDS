@@ -152,6 +152,22 @@ Java_me_magnum_melonds_pokewalker_PokewalkerNative_deviceFrame(JNIEnv* env, jobj
     return flags;
 }
 
+JNIEXPORT void JNICALL
+Java_me_magnum_melonds_pokewalker_PokewalkerNative_deviceOpenApp(JNIEnv*, jobject, jint index)
+{
+    pokewalker::ir::DeviceOpenApp(index);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_me_magnum_melonds_pokewalker_PokewalkerNative_widgetFrame(JNIEnv* env, jobject, jbyteArray out)
+{
+    pokewalker::u8 frame[96 * 64];
+    if (!out || env->GetArrayLength(out) < (jsize)sizeof(frame)) return JNI_FALSE;
+    if (!pokewalker::ir::WidgetFrame(frame, sizeof(frame))) return JNI_FALSE;
+    env->SetByteArrayRegion(out, 0, (jsize)sizeof(frame), reinterpret_cast<const jbyte*>(frame));
+    return JNI_TRUE;
+}
+
 JNIEXPORT jbyteArray JNICALL
 Java_me_magnum_melonds_pokewalker_PokewalkerNative_exportImage(JNIEnv* env, jobject)
 {

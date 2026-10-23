@@ -416,6 +416,18 @@ bool WalkerDevice::Update(s64 nowMs)
     return changed;
 }
 
+void WalkerDevice::OpenApp(int index, s64 nowMs)
+{
+    now = nowMs;
+    RefreshSnapshot(true);
+    if (!snap.registered || snap.session || index < 0 || index > 5) return;
+    messages.clear();
+    noticeText.clear();
+    menuIndex = index;
+    Go(Screen::Menu);
+    EnterApp(index);
+}
+
 void WalkerDevice::EnterApp(int index)
 {
     switch (index)

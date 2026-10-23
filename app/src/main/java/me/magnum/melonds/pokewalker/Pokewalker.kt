@@ -1,6 +1,7 @@
 package me.magnum.melonds.pokewalker
 
 import android.content.Context
+import android.content.Intent
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -12,6 +13,10 @@ import java.io.File
 import java.text.DateFormat
 import java.util.Date
 import java.util.TimeZone
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 /**
  * Settings and storage for the infrared Pokéwalker support.
@@ -20,6 +25,14 @@ object Pokewalker {
     const val KEY_IR_MODE = "pokewalker_ir_mode"
     const val KEY_TCP_PORT = "pokewalker_tcp_port"
     const val KEY_LOG_PACKETS = "pokewalker_log_packets"
+    const val KEY_AUTO_SYNC = "pokewalker_auto_sync"
+    const val KEY_STEP_GOAL = "pokewalker_step_goal"
+    const val KEY_SKIN = "pokewalker_device_skin"
+    private const val KEY_LAST_GAME_URI = "pokewalker_last_game_uri"
+    private const val KEY_LAST_GAME_NAME = "pokewalker_last_game_name"
+
+    const val SKIN_MODERN = "modern"
+    const val SKIN_CLASSIC = "classic"
 
     const val MODE_OFF = "off"
     const val MODE_VIRTUAL = "virtual"
@@ -30,6 +43,9 @@ object Pokewalker {
 
     @Volatile
     private var logChecked = false
+
+    /** For quick background jobs that should outlive the screen that started them. */
+    internal val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     fun eepromFile(context: Context): File = File(File(context.filesDir, "pokewalker"), "eeprom.bin")
 
@@ -80,6 +96,64 @@ object Pokewalker {
     }
 
     fun status(): WalkerStatus = WalkerStatus.parse(PokewalkerNative.getStatusJson())
+
+    private fun prefs(context: Context) = PreferenceManager.getDefaultSharedPreferences(context)
+
+    fun autoSyncEnabled(context: Context): Boolean = prefs(context).getBoolean(KEY_AUTO_SYNC, true)
+
+    fun stepGoal(context: Context): Int =
+        prefs(context).getString(KEY_STEP_GOAL, "10000")?.trim()?.toIntOrNull()?.takeIf { it in 100..99999 } ?: 10000
+
+    fun skin(context: Context): String = prefs(context).getString(KEY_SKIN, SKIN_MODERN) ?: SKIN_MODERN
+
+    fun setSkin(context: Context, skin: String) {
+        prefs(context).edit().putString(KEY_SKIN, skin).apply()
+    }
+
+    /** App start: background step sync, launcher shortcuts. */
+    fun onAppStarted(context: Context) {
+        val app = context.applicationContext
+        try {
+            PokewalkerSyncWorker.schedule(app)
+        } catch (e: Throwable) {
+            Log.e(TAG, "Could not schedule the step sync", e)
+        }
+        PokewalkerShortcuts.publish(app)
+    }
+
+    /** Name of the HeartGold/SoulSilver ROM last started, if any. */
+    fun lastGameName(context: Context): String? = prefs(context).getString(KEY_LAST_GAME_NAME, null)
+
+    /** Starts the HeartGold/SoulSilver ROM last played in this app, or null if there is none yet. */
+    fun openGameIntent(context: Context): Intent? {
+        val uri = prefs(context).getString(KEY_LAST_GAME_URI, null) ?: return null
+        return Intent("${context.packageName}.LAUNCH_ROM")
+            .setPackage(context.packageName)
+            .putExtra("uri", uri)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+
+    /**
+     * Called once a game is running. For HeartGold/SoulSilver: remembers the ROM for the
+     * walker's "open game" button, and pulls new steps from Health Connect so the walker
+     * is up to date before the game connects to it.
+     */
+    fun onGameStarted(context: Context, romUri: String, romName: String) {
+        val app = context.applicationContext
+        try {
+            if (!status().gameIsPokewalkerCompatible) return
+        } catch (e: Throwable) {
+            return
+        }
+        prefs(app).edit().putString(KEY_LAST_GAME_URI, romUri).putString(KEY_LAST_GAME_NAME, romName).apply()
+        if (!autoSyncEnabled(app)) return
+        scope.launch {
+            val result = WalkerSync.fromHealthConnect(app)
+            if (result is WalkerSync.Result.Added) {
+                PokewalkerNative.note("Synced ${result.steps} steps from Health Connect as the game started")
+            }
+        }
+    }
 
     /** One sentence describing [check], or null when there is nothing to compare against. */
     fun copyCheckText(context: Context, check: CopyCheck?): String? {

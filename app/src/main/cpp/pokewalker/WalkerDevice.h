@@ -44,6 +44,10 @@ public:
     void Press(Button button, s64 nowMs);
     /// Advances timers and redraws. Returns true when the picture changed.
     bool Update(s64 nowMs);
+    /// Jumps straight into one of the menu's apps (0 Poké Radar, 1 Dowsing,
+    /// 2 Connect, 3 Trainer Card, 4 Pokémon & Items, 5 Settings), as launcher
+    /// shortcuts and quick actions do. Ignored while unpaired or connected.
+    void OpenApp(int index, s64 nowMs);
 
     /// Shades 0 (lightest) to 3 (darkest), row by row.
     const std::array<u8, Width * Height>& Frame() const { return frame; }

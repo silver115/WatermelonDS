@@ -124,6 +124,7 @@ class AndroidEmulatorManager(
                 MelonEmulator.setupCheats(cheats.toTypedArray())
                 MelonEmulator.startEmulation()
                 me.magnum.melonds.pokewalker.Pokewalker.announceCopyCheck(context)
+                me.magnum.melonds.pokewalker.Pokewalker.onGameStarted(context, rom.uri.toString(), rom.name)
 
                 RomLaunchResult.LaunchSuccessful(loadResult != MelonEmulator.LoadResult.SUCCESS_GBA_FAILED)
             }
@@ -166,6 +167,8 @@ class AndroidEmulatorManager(
 
     override suspend fun pauseEmulator() {
         MelonEmulator.pauseEmulation()
+        // the game may just have talked to the walker: show fresh numbers on the home screen
+        me.magnum.melonds.pokewalker.PokewalkerWidget.updateAll(context)
     }
 
     override suspend fun resumeEmulator() {

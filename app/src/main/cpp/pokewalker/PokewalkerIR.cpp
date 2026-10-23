@@ -167,8 +167,10 @@ struct State
     bool tcpRunning = false;
     u32 gamecode = 0;
     u32 irversion = 0;
-    // The walker's own screen, created when first shown.
+    // The walker's own screen, created when first shown, and a second one that
+    // only ever draws the home screen for widgets.
     std::unique_ptr<WalkerDevice> device;
+    std::unique_ptr<WalkerDevice> widgetDevice;
     // Screen trace for HG/SS (US), fed once per frame.
     GameTrace trace;
     std::vector<std::string> traceLines;
@@ -449,20 +451,22 @@ s64 SteadyMs()
     return (s64)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
+std::unique_ptr<WalkerDevice> MakeDevice(State& s)
+{
+    auto gen = std::make_shared<std::mt19937>((u32)std::chrono::steady_clock::now().time_since_epoch().count());
+    return std::make_unique<WalkerDevice>(
+        s.walker, [gen]() { return (u32)(*gen)(); },
+        []() {
+            time_t t = time(nullptr);
+            struct tm lt {};
+            localtime_r(&t, &lt);
+            return lt.tm_hour * 60 + lt.tm_min;
+        });
+}
+
 WalkerDevice& Device(State& s)
 {
-    if (!s.device)
-    {
-        auto gen = std::make_shared<std::mt19937>((u32)std::chrono::steady_clock::now().time_since_epoch().count());
-        s.device = std::make_unique<WalkerDevice>(
-            s.walker, [gen]() { return (u32)(*gen)(); },
-            []() {
-                time_t t = time(nullptr);
-                struct tm lt {};
-                localtime_r(&t, &lt);
-                return lt.tm_hour * 60 + lt.tm_min;
-            });
-    }
+    if (!s.device) s.device = MakeDevice(s);
     return *s.device;
 }
 
@@ -483,6 +487,28 @@ void DevicePress(int button)
                            : button == 2 ? WalkerDevice::Button::Right
                                          : WalkerDevice::Button::Center;
     Device(s).Press(b, SteadyMs());
+}
+
+void DeviceOpenApp(int index)
+{
+    State& s = S();
+    std::lock_guard<std::mutex> guard(s.lock);
+    Device(s).OpenApp(index, SteadyMs());
+}
+
+bool WidgetFrame(u8* out, size_t len)
+{
+    State& s = S();
+    std::lock_guard<std::mutex> guard(s.lock);
+    if (!s.walker.IsOpen() || !out) return false;
+    if (!s.widgetDevice) s.widgetDevice = MakeDevice(s);
+    s64 now = SteadyMs();
+    s.widgetDevice->Reset(now);
+    s.widgetDevice->Update(now);
+    const auto& frame = s.widgetDevice->Frame();
+    if (len < frame.size()) return false;
+    std::memcpy(out, frame.data(), frame.size());
+    return true;
 }
 
 int DeviceFrame(u8* out, size_t len)

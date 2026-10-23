@@ -67,6 +67,11 @@ void DevicePress(int button);
 /// into out when the picture changed. Returns flags: bit 0 changed, bits 4-7
 /// sound to play, bits 8-9 volume (0-2), bits 12-15 shade (0-9).
 int DeviceFrame(u8* out, size_t len);
+/// Opens one of the walker's apps directly (see WalkerDevice::OpenApp).
+void DeviceOpenApp(int index);
+/// The walker's home screen for widgets (96x64 shades). Returns false when the
+/// walker is not open.
+bool WidgetFrame(u8* out, size_t len);
 
 /// True for Pokémon HeartGold / SoulSilver game codes (IPK* / IPG*).
 bool IsPokewalkerGame(u32 gamecode);

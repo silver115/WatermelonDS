@@ -26,6 +26,8 @@ data class WalkerStatus(
     val gifted: Int,
     /** Result of the HeartGold/SoulSilver copy check for the loaded game, if one ran. */
     val copyCheck: CopyCheck?,
+    /** The game loaded in the emulator is HeartGold or SoulSilver. */
+    val gameIsPokewalkerCompatible: Boolean = false,
 ) {
     companion object {
         fun parse(json: String): WalkerStatus {
@@ -55,6 +57,7 @@ data class WalkerStatus(
                 caught = o.optInt("caught"),
                 dowsed = o.optInt("dowsed"),
                 gifted = o.optInt("gifted"),
+                gameIsPokewalkerCompatible = o.optBoolean("gameIsPokewalkerCompatible"),
                 copyCheck = o.optJSONObject("romCheck")?.let { c ->
                     CopyCheck(
                         release = c.optString("release"),

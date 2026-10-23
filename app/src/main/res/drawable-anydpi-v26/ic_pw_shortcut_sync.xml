@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Launcher shortcut icon -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background>
+        <color android:color="#FFF2A33A" />
+    </background>
+    <foreground>
+        <inset android:drawable="@drawable/ic_refresh" android:inset="31%" />
+    </foreground>
+</adaptive-icon>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Launcher shortcut icon -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background>
+        <color android:color="#FF2FBF86" />
+    </background>
+    <foreground>
+        <inset android:drawable="@drawable/ic_pw_dowsing" android:inset="31%" />
+    </foreground>
+</adaptive-icon>
