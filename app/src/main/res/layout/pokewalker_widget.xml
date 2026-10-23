@@ -18,7 +18,8 @@
         android:background="@drawable/pokewalker_widget_lcd_bg"
         android:contentDescription="@string/pokewalker_device_label"
         android:padding="6dp"
-        android:scaleType="fitCenter" />
+        android:scaleType="fitCenter"
+        android:src="@drawable/ic_pokewalker_device_foreground" />
 
     <LinearLayout
         android:layout_width="0dp"
@@ -34,6 +35,7 @@
             android:layout_height="wrap_content"
             android:ellipsize="end"
             android:maxLines="1"
+            android:text="@string/pokewalker_device_label"
             android:textColor="#FF8D98AE"
             android:textSize="12sp" />
 
@@ -42,6 +44,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:maxLines="1"
+            android:text="@string/pokewalker_widget_steps_placeholder"
             android:textColor="#FFF2F5FA"
             android:textSize="24sp"
             android:textStyle="bold" />
@@ -83,6 +86,7 @@
                 android:layout_marginStart="4dp"
                 android:layout_weight="1"
                 android:maxLines="1"
+                android:text="@string/pokewalker_widget_watts_placeholder"
                 android:textColor="#FFFFC44D"
                 android:textSize="14sp"
                 android:textStyle="bold" />

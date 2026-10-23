@@ -704,6 +704,9 @@
     <string name="pokewalker_sync_failed">Step sync failed: %1$s</string>
     <string name="pokewalker_widget_description">Your walking Pokémon, today\'s steps and watts</string>
     <string name="pokewalker_widget_steps_today">steps today</string>
+    <!-- Shown in the widget picker's preview before the widget has real numbers. -->
+    <string name="pokewalker_widget_steps_placeholder" translatable="false">0</string>
+    <string name="pokewalker_widget_watts_placeholder" translatable="false">0 W</string>
     <string name="pokewalker_shortcut_radar">Poké Radar</string>
     <string name="pokewalker_shortcut_dowsing">Dowsing</string>
     <string name="pokewalker_shortcut_card">Trainer card</string>
