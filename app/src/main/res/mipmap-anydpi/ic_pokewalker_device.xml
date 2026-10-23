@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 7.x launchers: the same picture on a round background. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="@color/pokewalker_device_icon_background" />
+        </shape>
+    </item>
+    <item android:drawable="@drawable/ic_pokewalker_device_foreground" />
+</layer-list>

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The on-screen Pokéwalker (PokewalkerDeviceActivity). -->
+    <color name="pokewalker_device_background">#FF1D2230</color>
+    <color name="pokewalker_device_icon_background">#FF2E8C7E</color>
+
+    <style name="PokewalkerDeviceTheme" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowBackground">@color/pokewalker_device_background</item>
+        <item name="android:statusBarColor">@color/pokewalker_device_background</item>
+        <item name="android:navigationBarColor">@color/pokewalker_device_background</item>
+    </style>
+</resources>

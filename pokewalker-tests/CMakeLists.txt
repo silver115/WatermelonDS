@@ -38,6 +38,18 @@ add_executable(rom_check_test
 )
 target_include_directories(rom_check_test PRIVATE ${PW_SRC})
 
+# The walker's own screen (menus, Poke Radar, dowsing...) drawn from its EEPROM images.
+add_executable(device_test
+    device_test.cpp
+    ${PW_SRC}/WalkerDevice.cpp
+    ${PW_SRC}/PixelFont.cpp
+    ${PW_SRC}/PwProtocol.cpp
+    ${PW_SRC}/EepromStore.cpp
+    ${PW_SRC}/PwText.cpp
+    ${PW_SRC}/VirtualPokewalker.cpp
+)
+target_include_directories(device_test PRIVATE ${PW_SRC})
+
 # The HG/SS screen trace (main RAM layout from the decompilation).
 add_executable(game_trace_test
     game_trace_test.cpp
@@ -46,7 +58,7 @@ add_executable(game_trace_test
 target_include_directories(game_trace_test PRIVATE ${PW_SRC})
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    foreach(t walker_test hgss_flow_test rom_check_test game_trace_test)
+    foreach(t walker_test hgss_flow_test rom_check_test game_trace_test device_test)
         target_compile_options(${t} PRIVATE -Wall -Wextra -fsanitize=address,undefined -fno-omit-frame-pointer)
         target_link_options(${t} PRIVATE -fsanitize=address,undefined)
     endforeach()

@@ -19,6 +19,13 @@
             app:iconSpaceReserved="false">
 
         <Preference
+                android:key="pokewalker_device"
+                android:title="@string/pokewalker_device_open"
+                android:summary="@string/pokewalker_device_open_summary"
+                android:persistent="false"
+                app:iconSpaceReserved="false" />
+
+        <Preference
                 android:key="pokewalker_radar"
                 android:title="@string/pokewalker_radar"
                 android:summary="@string/pokewalker_radar_summary"

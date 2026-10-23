@@ -13,6 +13,7 @@
 #include <ctime>
 #include <memory>
 #include <mutex>
+#include <random>
 #include <thread>
 
 #include <arpa/inet.h>
@@ -28,6 +29,7 @@
 #endif
 
 #include "GameTrace.h"
+#include "WalkerDevice.h"
 #include "PwText.h"
 #include "RomCheck.h"
 #include "VirtualPokewalker.h"
@@ -165,6 +167,8 @@ struct State
     bool tcpRunning = false;
     u32 gamecode = 0;
     u32 irversion = 0;
+    // The walker's own screen, created when first shown.
+    std::unique_ptr<WalkerDevice> device;
     // Screen trace for HG/SS (US), fed once per frame.
     GameTrace trace;
     std::vector<std::string> traceLines;
@@ -435,6 +439,60 @@ void OnFrame(const u8* mainRam, u32 mainRamMask, u32 keyInput)
 void SetTouching(bool touching)
 {
     gTouching.store(touching, std::memory_order_relaxed);
+}
+
+namespace
+{
+
+s64 SteadyMs()
+{
+    return (s64)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+WalkerDevice& Device(State& s)
+{
+    if (!s.device)
+    {
+        auto gen = std::make_shared<std::mt19937>((u32)std::chrono::steady_clock::now().time_since_epoch().count());
+        s.device = std::make_unique<WalkerDevice>(
+            s.walker, [gen]() { return (u32)(*gen)(); },
+            []() {
+                time_t t = time(nullptr);
+                struct tm lt {};
+                localtime_r(&t, &lt);
+                return lt.tm_hour * 60 + lt.tm_min;
+            });
+    }
+    return *s.device;
+}
+
+}
+
+void DeviceReset()
+{
+    State& s = S();
+    std::lock_guard<std::mutex> guard(s.lock);
+    Device(s).Reset(SteadyMs());
+}
+
+void DevicePress(int button)
+{
+    State& s = S();
+    std::lock_guard<std::mutex> guard(s.lock);
+    WalkerDevice::Button b = button == 0 ? WalkerDevice::Button::Left
+                           : button == 2 ? WalkerDevice::Button::Right
+                                         : WalkerDevice::Button::Center;
+    Device(s).Press(b, SteadyMs());
+}
+
+int DeviceFrame(u8* out, size_t len)
+{
+    State& s = S();
+    std::lock_guard<std::mutex> guard(s.lock);
+    WalkerDevice& d = Device(s);
+    bool changed = d.Update(SteadyMs());
+    if (changed && out && len >= d.Frame().size()) std::memcpy(out, d.Frame().data(), d.Frame().size());
+    return (changed ? 1 : 0) | ((int)d.TakeSound() << 4) | (d.Volume() << 8) | (d.Shade() << 12);
 }
 
 int OnGameSend(const u8* data, int len)

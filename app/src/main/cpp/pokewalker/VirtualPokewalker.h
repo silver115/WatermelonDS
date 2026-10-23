@@ -71,13 +71,38 @@ public:
     /// Poké Radar: spends 10 W and picks which route Pokémon appears, using the
     /// walker's rules (today's steps against each slot's requirement, then its
     /// chance). Sets slot (0-2) and a JSON description of the encounter.
-    bool RadarEncounter(int* slot, std::string* json, std::string* error);
-    /// Keeps route Pokémon  in the first free catch slot (3 per stroll).
-    bool StoreCaught(int slot, std::string* error);
+    /// allowFull: also play when 3 Pokémon are already held (the catch then
+    /// replaces one, like the device's "switch?").
+    bool RadarEncounter(int* slot, std::string* json, std::string* error, bool allowFull = false);
+    /// Keeps route Pokémon `slot` in the first free catch slot (3 per stroll),
+    /// or in place of catch slot `replace` (0-2) when given.
+    bool StoreCaught(int slot, std::string* error, int replace = -1);
     /// Dowsing: spends 3 W and picks the item hidden in the grass.
-    bool DowsingStart(u16* item, std::string* json, std::string* error);
-    /// Keeps a dowsed item in the first free item slot (3 per stroll).
-    bool StoreDowsed(u16 item, std::string* error);
+    bool DowsingStart(u16* item, std::string* json, std::string* error, bool allowFull = false);
+    /// Keeps a dowsed item in the first free item slot (3 per stroll), or in
+    /// place of item slot `replace` (0-2) when given.
+    bool StoreDowsed(u16 item, std::string* error, int replace = -1);
+
+    // ---- read access for the on-screen walker (WalkerDevice) --------------------------
+    struct Snapshot
+    {
+        bool open = false;
+        bool registered = false;
+        bool hasPokemon = false;
+        bool session = false;
+        u32 todaySteps = 0;
+        u32 totalSteps = 0;
+        u16 watts = 0;
+        u16 totalDays = 0;
+        u8 settings = 0;
+        u32 history[ee::HistoryDays] {};
+    };
+    /// Current numbers; rolls the day over first when no game is connected.
+    Snapshot GetSnapshot();
+    /// The raw 64 KiB image, for drawing the walker's own screens.
+    const u8* Image() const { return store.Data(); }
+    /// Stores the sound/shade settings byte (HealthData +0x17).
+    bool SetSettings(u8 settings, std::string* error);
 
     // ---- hooks for tests / platform integration ------------------------------------
     void SetClocks(MonotonicMs mono, UnixSeconds wall, LocalDayOf localDay);

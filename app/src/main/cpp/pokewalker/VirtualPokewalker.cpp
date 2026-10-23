@@ -483,11 +483,11 @@ int VirtualPokewalker::FreeSlot(u32 base, int count, int stride) const
     return -1;
 }
 
-bool VirtualPokewalker::RadarEncounter(int* slot, std::string* json, std::string* error)
+bool VirtualPokewalker::RadarEncounter(int* slot, std::string* json, std::string* error, bool allowFull)
 {
     if (IsOpen() && !SessionActive()) RollOverDay();
     if (!CheckPlayable(RadarCost, error)) return false;
-    if (FreeSlot(ee::Caught, ee::CaughtCount, 16) < 0)
+    if (!allowFull && FreeSlot(ee::Caught, ee::CaughtCount, 16) < 0)
     {
         if (error) *error = "you already caught 3 Pokemon on this stroll, bring them home first";
         return false;
@@ -529,11 +529,12 @@ bool VirtualPokewalker::RadarEncounter(int* slot, std::string* json, std::string
     return true;
 }
 
-bool VirtualPokewalker::StoreCaught(int slot, std::string* error)
+bool VirtualPokewalker::StoreCaught(int slot, std::string* error, int replace)
 {
     if (!CheckPlayable(0, error)) return false;
     if (slot < 0 || slot > 2) { if (error) *error = "invalid route slot"; return false; }
-    int free = FreeSlot(ee::Caught, ee::CaughtCount, 16);
+    if (replace >= ee::CaughtCount) { if (error) *error = "invalid catch slot"; return false; }
+    int free = replace >= 0 ? replace : FreeSlot(ee::Caught, ee::CaughtCount, 16);
     if (free < 0) { if (error) *error = "you already caught 3 Pokemon on this stroll"; return false; }
     u8 mon[16];
     store.Read(ee::RouteInfo + route::Pokemon + (u32)slot * 16, mon, sizeof(mon));
@@ -543,11 +544,11 @@ bool VirtualPokewalker::StoreCaught(int slot, std::string* error)
     return true;
 }
 
-bool VirtualPokewalker::DowsingStart(u16* item, std::string* json, std::string* error)
+bool VirtualPokewalker::DowsingStart(u16* item, std::string* json, std::string* error, bool allowFull)
 {
     if (IsOpen() && !SessionActive()) RollOverDay();
     if (!CheckPlayable(DowsingCost, error)) return false;
-    if (FreeSlot(ee::Dowsed, ee::DowsedCount, 4) < 0)
+    if (!allowFull && FreeSlot(ee::Dowsed, ee::DowsedCount, 4) < 0)
     {
         if (error) *error = "you already found 3 items on this stroll, bring them home first";
         return false;
@@ -578,13 +579,13 @@ bool VirtualPokewalker::DowsingStart(u16* item, std::string* json, std::string* 
     SpendWatts(DowsingCost);
     *item = rd16le(&ri[route::Items + chosen * 2]);
     std::ostringstream js;
-    js << "{\"item\":" << *item << ",\"itemName\":\"" << JsonEscape(ItemName(*item)) << "\""
+    js << "{\"item\":" << *item << ",\"index\":" << chosen << ",\"itemName\":\"" << JsonEscape(ItemName(*item)) << "\""
        << ",\"watts\":" << rd16be(&ReadHealth()[hd::Watts]) << "}";
     *json = js.str();
     return true;
 }
 
-bool VirtualPokewalker::StoreDowsed(u16 item, std::string* error)
+bool VirtualPokewalker::StoreDowsed(u16 item, std::string* error, int replace)
 {
     if (!CheckPlayable(0, error)) return false;
     u8 ri[route::Size];
@@ -593,13 +594,48 @@ bool VirtualPokewalker::StoreDowsed(u16 item, std::string* error)
     for (int i = 0; i < 10; i++)
         if (item != 0 && rd16le(&ri[route::Items + i * 2]) == item) onRoute = true;
     if (!onRoute) { if (error) *error = "that item is not on this route"; return false; }
-    int free = FreeSlot(ee::Dowsed, ee::DowsedCount, 4);
+    if (replace >= ee::DowsedCount) { if (error) *error = "invalid item slot"; return false; }
+    int free = replace >= 0 ? replace : FreeSlot(ee::Dowsed, ee::DowsedCount, 4);
     if (free < 0) { if (error) *error = "you already found 3 items on this stroll"; return false; }
     u8 entry[4] = {0, 0, 0, 0};
     wr16le(entry, item);
     store.Write(ee::Dowsed + (u32)free * 4, entry, sizeof(entry));
     store.Sync();
     Log(std::string("Found ") + ItemName(item));
+    return true;
+}
+
+VirtualPokewalker::Snapshot VirtualPokewalker::GetSnapshot()
+{
+    Snapshot snap;
+    if (!IsOpen()) return snap;
+    snap.open = true;
+    snap.session = SessionActive();
+    if (!snap.session) RollOverDay();
+    Identity ident = ReadIdentity();
+    Health h = ReadHealth();
+    snap.registered = ident[id::Flags] & id::FlagRegistered;
+    snap.hasPokemon = ident[id::Flags] & id::FlagHasPokemon;
+    snap.todaySteps = rd32be(&h[hd::TodaySteps]);
+    snap.totalSteps = rd32be(&h[hd::TotalSteps]);
+    snap.watts = rd16be(&h[hd::Watts]);
+    snap.totalDays = rd16be(&h[hd::TotalDays]);
+    snap.settings = h[hd::Settings];
+    u8 hist[ee::HistoryDays * 4];
+    store.Read(ee::History, hist, sizeof(hist));
+    for (int k = 0; k < ee::HistoryDays; k++) snap.history[k] = rd32be(&hist[k * 4]);
+    return snap;
+}
+
+bool VirtualPokewalker::SetSettings(u8 settings, std::string* error)
+{
+    if (!IsOpen()) { if (error) *error = "the virtual Pokewalker is not open"; return false; }
+    if (SessionActive()) { if (error) *error = "the game is connected to the Pokewalker right now"; return false; }
+    Health h = ReadHealth();
+    if (h[hd::Settings] == settings) return true;
+    h[hd::Settings] = settings;
+    WriteHealth(h);
+    store.Sync();
     return true;
 }
 

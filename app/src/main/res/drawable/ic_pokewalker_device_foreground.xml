@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Launcher icon for the on-screen walker: a small handheld with a screen and three buttons. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFF4F2EC"
+        android:pathData="M36,30h36a8,8 0,0 1,8 8v32a8,8 0,0 1,-8 8h-36a8,8 0,0 1,-8 -8v-32a8,8 0,0 1,8 -8z" />
+    <path
+        android:fillColor="#FF39404C"
+        android:pathData="M36,35h36a2,2 0,0 1,2 2v21a2,2 0,0 1,-2 2h-36a2,2 0,0 1,-2 -2v-21a2,2 0,0 1,2 -2z" />
+    <path
+        android:fillColor="#FFC6CDB6"
+        android:pathData="M37.5,38.5h33v18h-33z" />
+    <path
+        android:fillColor="#FF20261B"
+        android:pathData="M44,50h4v-4h4v-4h4v4h4v4h4v3h-20z" />
+    <path
+        android:fillColor="#FF39404C"
+        android:pathData="M44,69m-3,0a3,3 0,1 1,6 0a3,3 0,1 1,-6 0" />
+    <path
+        android:fillColor="#FF39404C"
+        android:pathData="M54,69m-4,0a4,4 0,1 1,8 0a4,4 0,1 1,-8 0" />
+    <path
+        android:fillColor="#FF39404C"
+        android:pathData="M64,69m-3,0a3,3 0,1 1,6 0a3,3 0,1 1,-6 0" />
+</vector>

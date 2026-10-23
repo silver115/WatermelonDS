@@ -59,6 +59,15 @@ bool StoreCaught(int slot, std::string* error);
 bool DowsingStart(u16* item, std::string* json, std::string* error);
 bool StoreDowsed(u16 item, std::string* error);
 
+// The walker's own screen (WalkerDevice) for the on-screen Pokéwalker.
+void DeviceReset();
+/// 0 left, 1 middle, 2 right.
+void DevicePress(int button);
+/// Advances and draws the screen; copies the 96x64 shades (0-3, row by row)
+/// into out when the picture changed. Returns flags: bit 0 changed, bits 4-7
+/// sound to play, bits 8-9 volume (0-2), bits 12-15 shade (0-9).
+int DeviceFrame(u8* out, size_t len);
+
 /// True for Pokémon HeartGold / SoulSilver game codes (IPK* / IPG*).
 bool IsPokewalkerGame(u32 gamecode);
 

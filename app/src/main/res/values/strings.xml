@@ -666,6 +666,10 @@
     <string name="pokewalker_status_walking_title">%1$s (Lv. %2$d) · %3$s</string>
     <string name="pokewalker_status_walking">Today: %1$s steps · Total: %2$s · %3$s W\nFound so far: %4$d Pokémon, %5$d items</string>
     <string name="pokewalker_status_since">On a stroll since %1$s</string>
+    <string name="pokewalker_device_label">Pokéwalker</string>
+    <string name="pokewalker_device_open">Pokéwalker screen</string>
+    <string name="pokewalker_device_open_summary">Use the walker like the real device: watch your Pokémon walk, Poké Radar, dowsing, trainer card. It also has its own app icon.</string>
+    <string name="pokewalker_device_synced">%1$s new steps from Health Connect</string>
     <string name="pokewalker_copy_original">Game check: your %1$s copy is the original release.</string>
     <string name="pokewalker_copy_original_trimmed">Game check: your %1$s copy is the original release (trimmed, which is fine).</string>
     <string name="pokewalker_copy_program_modified">Game check: your %1$s copy is MODIFIED. Its Pokéwalker program differs from the original, so the in-game Pokéwalker screen may not work. Use an unmodified copy of the game.</string>

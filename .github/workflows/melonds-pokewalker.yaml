@@ -32,6 +32,7 @@ jobs:
           ./build/pokewalker-tests/hgss_flow_test
           ./build/pokewalker-tests/rom_check_test
           ./build/pokewalker-tests/game_trace_test
+          ./build/pokewalker-tests/device_test
 
   apk:
     name: APK (arm64)

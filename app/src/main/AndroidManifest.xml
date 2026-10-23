@@ -177,6 +177,22 @@
             android:name="androidx.work.impl.foreground.SystemForegroundService"
             android:foregroundServiceType="dataSync"
             tools:node="merge" />
+        <!-- The virtual Pokéwalker as its own screen, with its own launcher icon. -->
+        <activity
+            android:name=".pokewalker.PokewalkerDeviceActivity"
+            android:label="@string/pokewalker_device_label"
+            android:icon="@mipmap/ic_pokewalker_device"
+            android:roundIcon="@mipmap/ic_pokewalker_device"
+            android:theme="@style/PokewalkerDeviceTheme"
+            android:taskAffinity="${applicationId}.pokewalkerdevice"
+            android:launchMode="singleTask"
+            android:configChanges="keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|keyboard|navigation"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
         <activity
             android:name=".pokewalker.HealthPermissionsRationaleActivity"
             android:label="@string/pokewalker_health_privacy_title"

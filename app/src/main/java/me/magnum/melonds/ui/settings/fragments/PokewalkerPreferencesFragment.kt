@@ -2,6 +2,7 @@ package me.magnum.melonds.ui.settings.fragments
 
 import android.content.ActivityNotFoundException
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.net.Uri
 import android.os.Build
@@ -23,6 +24,7 @@ import me.magnum.melonds.pokewalker.CreditResult
 import me.magnum.melonds.pokewalker.HealthConnectSteps
 import me.magnum.melonds.pokewalker.LocalDays
 import me.magnum.melonds.pokewalker.Pokewalker
+import me.magnum.melonds.pokewalker.PokewalkerDeviceActivity
 import me.magnum.melonds.pokewalker.PokewalkerNative
 import me.magnum.melonds.pokewalker.StepFileImporter
 import me.magnum.melonds.pokewalker.StepLedger
@@ -78,6 +80,10 @@ class PokewalkerPreferencesFragment : BasePreferenceFragment(), PreferenceFragme
 
         findPreference<Preference>("pokewalker_status")?.setOnPreferenceClickListener {
             refreshStatus()
+            true
+        }
+        findPreference<Preference>("pokewalker_device")?.setOnPreferenceClickListener {
+            launchSafely { startActivity(Intent(requireContext(), PokewalkerDeviceActivity::class.java)) }
             true
         }
         findPreference<Preference>("pokewalker_radar")?.setOnPreferenceClickListener {

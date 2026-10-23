@@ -39,6 +39,15 @@ header, overlay table and FAT of a synthetic ROM, including trimmed, padded and
 damaged images. The reference hashes are the decompilation's `rom.sha1` and
 `main.sha1` for the US releases.
 
+## device_test (runs in CI)
+
+The walker's own screen (`WalkerDevice.cpp`, shown by the Pokéwalker app icon):
+a walker image with labelled test pictures at every EEPROM image address, then
+the home screen, menu, Poké Radar (rounds of "!", battle, catching, "switch?"),
+dowsing (near/far hints), trainer card, Pokémon & items, settings and connect,
+checking the drawn pixels against the images and what ends up in the walker.
+`PW_DEVICE_DUMP=<dir>` writes each checked screen as a `.pgm` picture.
+
 ## game_trace_test (runs in CI)
 
 The screen trace (`GameTrace.cpp`) on a simulated DS main RAM laid out like the
@@ -61,7 +70,7 @@ ninja -C build/core core
 P=app/src/main/cpp/pokewalker
 g++ -std=c++17 -ImelonDS-android-lib/src -Ibuild/core/src -I$P pokewalker-tests/cart_ir_test.cpp \
   $P/PokewalkerIR.cpp $P/PlatformIR.cpp $P/VirtualPokewalker.cpp $P/EepromStore.cpp $P/PwProtocol.cpp $P/PwText.cpp \
-  $P/RomCheck.cpp $P/GameTrace.cpp \
+  $P/RomCheck.cpp $P/GameTrace.cpp $P/WalkerDevice.cpp $P/PixelFont.cpp \
   -Wl,--start-group build/core/src/libcore.a build/core/src/teakra/src/libteakra.a -Wl,--end-group \
   -Wl,--unresolved-symbols=ignore-all -lpthread -o cart_ir_test && ./cart_ir_test
 ```

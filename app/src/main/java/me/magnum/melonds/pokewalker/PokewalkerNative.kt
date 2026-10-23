@@ -40,4 +40,17 @@ object PokewalkerNative {
 
     /** Keeps a dowsed item. Returns null on success, otherwise an error message. */
     external fun storeDowsed(item: Int): String?
+
+    /** The walker's own screen: back to its home screen (when the screen opens). */
+    external fun deviceReset()
+
+    /** The walker's own screen: 0 = left, 1 = middle, 2 = right button. */
+    external fun devicePress(button: Int)
+
+    /**
+     * The walker's own screen: advances it and copies its 96x64 shades (0-3, row by row) into
+     * [frame] when the picture changed. Returns flags: bit 0 changed, bits 4-7 sound,
+     * bits 8-9 volume (0-2), bits 12-15 shade (0-9).
+     */
+    external fun deviceFrame(frame: ByteArray): Int
 }
