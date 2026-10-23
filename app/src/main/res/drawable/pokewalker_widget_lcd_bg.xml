@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Black surround for the walker's (cream) screen in the widget. -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
     <corners android:radius="12dp" />
-    <solid android:color="#FF2A344A" />
+    <solid android:color="#FF090D16" />
 </shape>

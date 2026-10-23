@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- The on-screen Pokéwalker (PokewalkerDeviceActivity). -->
-    <color name="pokewalker_device_background">#FF1D2230</color>
+    <color name="pokewalker_device_background">#FF0D1220</color>
     <color name="pokewalker_device_icon_background">#FF2E8C7E</color>
 
     <style name="PokewalkerTranslucentTheme" parent="Theme.AppCompat.NoActionBar">

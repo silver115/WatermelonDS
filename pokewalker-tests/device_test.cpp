@@ -698,6 +698,119 @@ void TestOpenApp()
     CHECK(r.Screen() == "menu");
 }
 
+void TestTouch()
+{
+    std::printf("touchscreen taps on the walker's screen\n");
+    Rig r;
+    auto tap = [&r](int x, int y) {
+        bool did = r.device.Touch(x, y, r.ms);
+        r.device.Update(r.ms);
+        return did;
+    };
+    CHECK(!tap(40, 30));                              // unpaired: nothing to do
+    CHECK(r.Screen() == "home");
+
+    Holdings held;
+    held.caught[0] = 25;
+    held.caught[1] = 19;
+    held.caught[2] = 19;
+    r.Load(BuildWalker(r.factory, true, true, 100, held));
+    CHECK(!tap(-1, 10) && !tap(96, 10) && !tap(10, 64)); // off the screen
+    r.device.TakeSound();
+    CHECK(tap(20, 20));                               // the Pokémon reacts
+    CHECK(r.Screen() == "home");
+    CHECK(r.Ink(64, 0, 24, 16) > 0);
+    CHECK(r.device.TakeSound() == WalkerDevice::Sound::Good);
+    CHECK(tap(80, 30));                               // elsewhere: the menu
+    CHECK(r.Screen() == "menu");
+    CHECK(r.Shows(8, 0, 80, 16, 0x0910));
+
+    // menu: title arrows, then icons (first tap picks, second opens)
+    CHECK(tap(90, 8));
+    CHECK(r.Shows(8, 0, 80, 16, 0x0910 + 320));
+    CHECK(tap(3, 8));
+    CHECK(r.Shows(8, 0, 80, 16, 0x0910));
+    CHECK(tap(4 * 16 + 5, 30));                       // Pokémon & Items picked...
+    CHECK(r.Screen() == "menu");
+    CHECK(r.Shows(8, 0, 80, 16, 0x0910 + 4 * 320));
+    CHECK(Contains(r.Status(), "\"watts\":100"));
+    CHECK(tap(4 * 16 + 9, 40));                       // ...and opened
+    CHECK(r.Screen() == "inventory");
+    CHECK(tap(12 + 4, 4));                            // second entry in the top row
+    CHECK(r.Shows(8, 44, 80, 16, 0xA4FE));            // the caught Pikachu
+    CHECK(!tap(95, 4));                               // past the last entry
+    CHECK(tap(48, 40));                               // middle: back to the menu
+    CHECK(r.Screen() == "menu");
+
+    // trainer card pages by thirds
+    CHECK(tap(3 * 16 + 4, 30));
+    CHECK(tap(3 * 16 + 4, 30));
+    CHECK(r.Screen() == "trainer card");
+    CHECK(tap(90, 30));
+    CHECK(r.Shows(0, 0, 40, 16, 0x13D0));             // steps page
+    CHECK(tap(5, 30));
+    CHECK(r.Shows(16, 0, 80, 16, 0x1250));            // back to the first page
+    CHECK(tap(48, 30));
+    CHECK(r.Screen() == "menu");
+
+    // settings: sound cycles, shade by halves, the return arrow saves
+    CHECK(tap(5 * 16 + 4, 30));
+    CHECK(tap(5 * 16 + 4, 30));
+    CHECK(r.Screen() == "settings");
+    CHECK(tap(30, 8));                                // high -> off
+    CHECK(r.device.Volume() == 0);
+    CHECK(tap(80, 30));                               // shade 4 -> 5
+    CHECK(tap(80, 30));                               // -> 6
+    CHECK(tap(20, 30));                               // -> 5
+    CHECK(r.device.Shade() == 5);
+    CHECK(!tap(20, 55));                              // bottom left: nothing there
+    CHECK(tap(90, 55));
+    CHECK(r.Screen() == "menu");
+    CHECK(r.walker.GetSnapshot().settings == ((5 << 3) | (0 << 1)));
+
+    // dowsing: tap the bushes themselves
+    CHECK(tap(1 * 16 + 4, 30));
+    r.script = {3};                                   // item under bush 3
+    CHECK(tap(1 * 16 + 4, 30));
+    CHECK(r.Screen() == "dowsing");
+    CHECK(tap(0 * 16 + 8, 24));                       // bush 0: far away
+    CHECK(r.Shows(0, 48, 96, 16, 0x4DB0));
+    CHECK(!tap(48, 50));                              // the hint line: nothing
+    CHECK(tap(3 * 16 + 8, 20));                       // bush 3: found
+    CHECK(r.Shows(0, 48, 96, 16, 0x4930));
+    CHECK(tap(70, 60));                               // a tap moves the message on
+    CHECK(r.Screen() == "menu");
+    CHECK(rd16le(r.walker.Image() + ee::Dowsed) == 17);
+
+    // Poké Radar: tap the rustling bush, catch from the middle of the placard
+    CHECK(tap(4, 30));
+    r.script = {0, 2};                                // "!" after 1000 ms on bush 2
+    CHECK(tap(4, 30));
+    CHECK(r.Screen() == "radar");
+    CHECK(!tap(48, 56));                              // "find a Pokémon!": nothing to pick
+    r.Wait(1050);
+    CHECK(tap(10, 30));                               // bush 2
+    CHECK(r.device.TakeSound() == WalkerDevice::Sound::Good);
+    r.Wait(1300);
+    CHECK(r.Screen() == "battle");
+    CHECK(tap(48, 50));                               // during "appeared!": moves it on
+    r.Step(50);
+    CHECK(r.Shows(0, 32, 96, 32, 0x2050));            // attack / evade / catch
+    r.script = {0};
+    CHECK(tap(48, 50));                               // catch
+    CHECK(r.Shows(0, 48, 96, 16, 0x5FB0));            // "threw a ball."
+    r.Wait(1350 + 1850);
+    CHECK(r.Screen() == "switch");                    // three held already
+
+    // switch?: the first tap picks a slot, the second replaces it
+    CHECK(tap(40, 30));
+    CHECK(r.Screen() == "switch");
+    CHECK(rd16le(r.walker.Image() + ee::Caught + 16) == 19);
+    CHECK(tap(40, 30));
+    CHECK(r.Screen() == "menu");
+    CHECK(rd16le(r.walker.Image() + ee::Caught + 16) == 25);
+}
+
 void TestChangedFlag()
 {
     std::printf("redraw only when something changed\n");
@@ -722,6 +835,7 @@ int main()
     TestDowsing();
     TestCardInventorySettings();
     TestOpenApp();
+    TestTouch();
     TestChangedFlag();
     std::printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

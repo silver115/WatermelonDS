@@ -46,6 +46,8 @@ a walker image with labelled test pictures at every EEPROM image address, then
 the home screen, menu, Poké Radar (rounds of "!", battle, catching, "switch?"),
 dowsing (near/far hints), trainer card, Pokémon & items, settings and connect,
 checking the drawn pixels against the images and what ends up in the walker.
+It also plays every screen by touch (`WalkerDevice::Touch`): tapping bushes,
+menu icons, "switch?" slots, settings rows and the battle placard.
 `PW_DEVICE_DUMP=<dir>` writes each checked screen as a `.pgm` picture.
 
 ## game_trace_test (runs in CI)

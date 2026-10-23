@@ -69,6 +69,8 @@ void DevicePress(int button);
 int DeviceFrame(u8* out, size_t len);
 /// Opens one of the walker's apps directly (see WalkerDevice::OpenApp).
 void DeviceOpenApp(int index);
+/// A tap on the walker's screen at walker pixel (x, y) (see WalkerDevice::Touch).
+bool DeviceTouch(int x, int y);
 /// The walker's home screen for widgets (96x64 shades). Returns false when the
 /// walker is not open.
 bool WidgetFrame(u8* out, size_t len);

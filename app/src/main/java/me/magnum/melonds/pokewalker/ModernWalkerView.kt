@@ -9,6 +9,7 @@ import android.graphics.LinearGradient
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.RadialGradient
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
@@ -21,6 +22,22 @@ import android.view.MotionEvent
 import android.view.View
 import androidx.core.content.ContextCompat
 import me.magnum.melonds.R
+import me.magnum.melonds.pokewalker.WalkerTheme.AURA
+import me.magnum.melonds.pokewalker.WalkerTheme.BG_BOTTOM
+import me.magnum.melonds.pokewalker.WalkerTheme.BG_TOP
+import me.magnum.melonds.pokewalker.WalkerTheme.BLUE
+import me.magnum.melonds.pokewalker.WalkerTheme.BLUE_LIGHT
+import me.magnum.melonds.pokewalker.WalkerTheme.CARD
+import me.magnum.melonds.pokewalker.WalkerTheme.CARD_EDGE
+import me.magnum.melonds.pokewalker.WalkerTheme.CONTROL
+import me.magnum.melonds.pokewalker.WalkerTheme.CREAM
+import me.magnum.melonds.pokewalker.WalkerTheme.GOLD
+import me.magnum.melonds.pokewalker.WalkerTheme.INK
+import me.magnum.melonds.pokewalker.WalkerTheme.RED
+import me.magnum.melonds.pokewalker.WalkerTheme.SCREEN_FRAME
+import me.magnum.melonds.pokewalker.WalkerTheme.TEXT
+import me.magnum.melonds.pokewalker.WalkerTheme.TEXT_DIM
+import me.magnum.melonds.pokewalker.WalkerTheme.TEXT_FAINT
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -29,11 +46,13 @@ import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 /**
- * The modern look: the walker's screen large and crisp in a card, a three-way control
- * under it, today's steps against a goal, watts and what the walker holds, the last week
- * as a chart, and one-tap actions. Everything is drawn here; the walker logic is native.
+ * The modern look, in Lucario colours: the walker's screen large and crisp in a card (tap
+ * it, or swipe it sideways), a three-way control under it, today's steps against a goal,
+ * watts and what the walker holds, the last week as a chart, and one-tap actions.
+ * Everything is drawn here; the walker logic is native.
  *
  * It arranges itself for the space it gets:
  *  - tall (phones held upright): screen card, steps and watts, the week, actions, stacked;
@@ -47,6 +66,7 @@ class ModernWalkerView(
     context: Context,
     private val onButton: (Int) -> Unit,
     private val onAction: (Int) -> Unit,
+    onScreenTap: (x: Int, y: Int) -> Unit,
 ) : View(context), WalkerSkin {
 
     companion object {
@@ -57,20 +77,6 @@ class ModernWalkerView(
 
         private const val LCD_W = 96f
         private const val LCD_H = 64f
-
-        private const val BG_TOP = 0xFF0E1322.toInt()
-        private const val BG_BOTTOM = 0xFF182033.toInt()
-        private const val CARD = 0xFF1B2335.toInt()
-        private const val CARD_EDGE = 0xFF27324A.toInt()
-        private const val CONTROL = 0xFF263049.toInt()
-        private const val SCREEN_FRAME = 0xFF0B1020.toInt()
-        private const val INK = 0xFF0E1322.toInt()
-        private const val TEXT = 0xFFF2F5FA.toInt()
-        private const val TEXT_DIM = 0xFF8D98AE.toInt()
-        private const val TEXT_FAINT = 0xFF5D6880.toInt()
-        private const val ACCENT = 0xFF3FA2FF.toInt()
-        private const val GREEN = 0xFF41D19A.toInt()
-        private const val AMBER = 0xFFFFC44D.toInt()
 
         private val ACTION_LABELS = intArrayOf(
             R.string.pokewalker_action_sync, R.string.pokewalker_action_radar,
@@ -120,11 +126,13 @@ class ModernWalkerView(
     private var compact = false
     private val clip = Path()
     private var background: Shader? = null
+    private var aura: Shader? = null
 
     // touch
     private val pressedButton = BooleanArray(3)
     private var pressedChip = -1
     private val pointerSegment = HashMap<Int, Int>()
+    private val gestures = LcdGestures(this, onScreenTap) { button -> onButton(button) }.apply { rippleColor = BLUE }
 
     private val icons = HashMap<Int, Drawable?>()
 
@@ -169,18 +177,24 @@ class ModernWalkerView(
     // ---- layout ----------------------------------------------------------------------------
 
     /** Screen card padding and the frame round the screen, left and right together. */
-    private val chromeW get() = dp(44f)
+    private val chromeW get() = dp(38f)
 
-    /** The name and the line under it; taller when the system font is set larger. */
-    private val headerH get() = sp(20f) + sp(19f) + dp(15f)
+    /** One line: the name, then level and route; taller when the system font is larger. */
+    private val headerH get() = max(sp(22f), dp(26f)) + dp(10f)
 
     /** Screen card top, header, frame, gap, the three buttons and the bottom, together. */
-    private val chromeH get() = dp(106f) + headerH
+    private val chromeH get() = dp(96f) + headerH
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         background = LinearGradient(0f, 0f, 0f, h.toFloat(), BG_TOP, BG_BOTTOM, Shader.TileMode.CLAMP)
         layoutFor(w.toFloat(), h.toFloat())
+        // a soft blue aura behind the walker's screen
+        val r = max(lcdCard.width(), lcdCard.height()) * 0.85f
+        aura = if (r > 0f) {
+            RadialGradient(lcdCard.centerX(), lcdCard.top + lcdCard.height() * 0.4f, r,
+                intArrayOf(AURA and 0x00FFFFFF or 0x38000000, AURA and 0x00FFFFFF), null, Shader.TileMode.CLAMP)
+        } else null
     }
 
     private fun layoutFor(w: Float, h: Float) {
@@ -192,14 +206,44 @@ class ModernWalkerView(
         weekCard.setEmpty()
         for (c in chips) c.setEmpty()
         compact = false
+        // The biggest walker screen wins; between equals, the arrangement that shows more.
+        val compactUnit = compactUnit(w, h, pad, gap)
         val placed = when {
-            w >= h * 1.2f -> layoutWide(w, h, pad, gap)
-            h >= w * 1.2f -> layoutTall(w, h, pad, gap, withWeek = true) || layoutTall(w, h, pad, gap, withWeek = false)
+            w >= h * 1.2f -> wideUnit(w, h, pad) >= compactUnit && layoutWide(w, h, pad, gap)
+            h >= w * 1.2f -> {
+                val withWeek = tallUnit(w, h, pad, gap, withWeek = true)
+                val without = tallUnit(w, h, pad, gap, withWeek = false)
+                when {
+                    withWeek >= compactUnit && withWeek >= without -> layoutTall(w, h, pad, gap, withWeek = true)
+                    without >= compactUnit -> layoutTall(w, h, pad, gap, withWeek = false)
+                    else -> false
+                }
+            }
             else -> false
         }
         if (!placed) layoutCompact(w, h, pad, gap)
         layoutScreenCard()
     }
+
+    /** Walker pixel size in each arrangement (0 when it doesn't fit or the screen would be too small). */
+    private fun wideUnit(w: Float, h: Float, pad: Float): Float {
+        val leftMax = w - pad * 3 - dp(260f)
+        if (leftMax < dp(232f)) return 0f
+        val unit = lcdUnit(leftMax - chromeW, h - pad * 2 - chromeH)
+        return if (readable(unit)) unit else 0f
+    }
+
+    private fun tallBelow(gap: Float, withWeek: Boolean) = gap + dp(140f) + (if (withWeek) gap + dp(124f) else 0f) + gap + dp(68f)
+
+    private fun tallUnit(w: Float, h: Float, pad: Float, gap: Float, withWeek: Boolean): Float {
+        val cardW = min(w - pad * 2, dp(560f))
+        val unit = lcdUnit(cardW - chromeW, h - pad * 2 - tallBelow(gap, withWeek) - chromeH)
+        return if (readable(unit)) unit else 0f
+    }
+
+    private fun compactUnit(w: Float, h: Float, pad: Float, gap: Float): Float =
+        if (w >= h) lcdUnit(w - pad * 3 - dp(88f) - chromeW, h - pad * 2 - chromeH)
+        else lcdUnit(w - pad * 2 - chromeW, h - pad * 2 - gap - dp(68f) - chromeH)
 
     /** Whole-pixel scale for the 96x64 screen in a maxW x maxH box, at most about 6dp a pixel. */
     private fun lcdUnit(maxW: Float, maxH: Float): Float {
@@ -216,9 +260,9 @@ class ModernWalkerView(
         val summaryH = dp(140f)
         val weekH = if (withWeek) dp(124f) else 0f
         val actionsH = dp(68f)
-        val below = gap + summaryH + (if (withWeek) gap + weekH else 0f) + gap + actionsH
-        val unit = lcdUnit(cardW - chromeW, h - pad * 2 - below - chromeH)
-        if (!readable(unit)) return false
+        val below = tallBelow(gap, withWeek)
+        val unit = tallUnit(w, h, pad, gap, withWeek)
+        if (unit <= 0f) return false
         val cardH = unit * LCD_H + chromeH
         val left = (w - cardW) / 2f
         var top = max(pad, (h - cardH - below) / 2f)
@@ -237,10 +281,9 @@ class ModernWalkerView(
     }
 
     private fun layoutWide(w: Float, h: Float, pad: Float, gap: Float): Boolean {
-        val leftMax = w - pad * 3 - dp(280f)
-        if (leftMax < dp(232f)) return false
-        val unit = lcdUnit(leftMax - chromeW, h - pad * 2 - chromeH)
-        if (!readable(unit)) return false
+        val leftMax = w - pad * 3 - dp(260f)
+        val unit = wideUnit(w, h, pad)
+        if (unit <= 0f) return false
         val colH = min(h - pad * 2, unit * LCD_H + chromeH + dp(40f))
         var leftW = max(unit * LCD_W + chromeW, dp(272f))
         leftW = max(leftW, (w - pad * 3) * 0.42f)
@@ -251,7 +294,7 @@ class ModernWalkerView(
         lcdCard.set(x, y, x + leftW, y + colH)
 
         val rl = lcdCard.right + pad
-        val oneRow = rightW >= dp(70f) * 4 + gap * 3
+        val oneRow = rightW >= dp(60f) * 4 + gap * 3
         val actionsH = if (oneRow) dp(68f) else dp(56f) * 2 + gap
         val rest = colH - actionsH - gap
         val withWeek = rest >= dp(128f) + gap + dp(96f)
@@ -315,14 +358,15 @@ class ModernWalkerView(
 
     /** Inside the screen card: the header, the screen (whole-pixel scale) and the three buttons. */
     private fun layoutScreenCard() {
-        val inner = dp(16f)
-        val frame = dp(6f)
+        val inner = dp(14f)
+        val frame = dp(5f)
         val controlH = dp(56f)
+        val bottom = dp(12f)
         val areaLeft = lcdCard.left + inner + frame
         val areaRight = lcdCard.right - inner - frame
-        val areaBottom = lcdCard.bottom - inner - controlH - dp(12f) - frame
+        val areaBottom = lcdCard.bottom - bottom - controlH - dp(10f) - frame
         var headerH = this.headerH
-        var areaTop = lcdCard.top + dp(10f) + headerH + frame
+        var areaTop = lcdCard.top + dp(8f) + headerH + frame
         var unit = lcdUnit(areaRight - areaLeft, areaBottom - areaTop)
         if (!readable(unit)) {
             // very little height: the screen matters more than the header
@@ -334,7 +378,7 @@ class ModernWalkerView(
                 areaTop = bareTop
             }
         }
-        header.set(lcdCard.left + inner, lcdCard.top + dp(10f), lcdCard.right - inner, lcdCard.top + dp(10f) + headerH)
+        header.set(lcdCard.left + inner + dp(2f), lcdCard.top + dp(8f), lcdCard.right - inner, lcdCard.top + dp(8f) + headerH)
         val lw = (LCD_W * unit).roundToInt()
         val lh = (LCD_H * unit).roundToInt()
         val lx = ((areaLeft + areaRight - lw) / 2f).roundToInt()
@@ -345,7 +389,7 @@ class ModernWalkerView(
         clip.addRoundRect(RectF(lcdRect), dp(8f), dp(8f), Path.Direction.CW)
 
         val controlW = min(max(lcdFrame.width(), dp(240f)), lcdCard.width() - inner * 2)
-        val cy = lcdCard.bottom - inner - controlH / 2f
+        val cy = lcdCard.bottom - bottom - controlH / 2f
         control.set(lcdCard.centerX() - controlW / 2f, cy - controlH / 2f, lcdCard.centerX() + controlW / 2f, cy + controlH / 2f)
         val segW = control.width() / 3f
         for (i in 0..2) segments[i].set(control.left + i * segW, control.top, control.left + (i + 1) * segW, control.bottom)
@@ -356,6 +400,8 @@ class ModernWalkerView(
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         fill.shader = background
+        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), fill)
+        fill.shader = aura
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), fill)
         fill.shader = null
 
@@ -409,12 +455,13 @@ class ModernWalkerView(
         card(canvas, lcdCard)
         if (header.height() > 0f) drawHeader(canvas)
 
-        // the walker's screen
+        // the walker's screen, and where it was touched
         fill.color = SCREEN_FRAME
-        canvas.drawRoundRect(lcdFrame, dp(12f), dp(12f), fill)
+        canvas.drawRoundRect(lcdFrame, dp(11f), dp(11f), fill)
         canvas.save()
         canvas.clipPath(clip)
         canvas.drawBitmap(lcd, null, lcdRect, lcdPaint)
+        gestures.draw(canvas, lcdRect)
         canvas.restore()
 
         // left / middle / right
@@ -423,7 +470,7 @@ class ModernWalkerView(
         for (i in 0..2) {
             val seg = segments[i]
             if (pressedButton[i]) {
-                fill.color = if (i == 1) GREEN else ACCENT
+                fill.color = if (i == 1) CREAM else BLUE
                 val r = RectF(seg.left + dp(4f), seg.top + dp(4f), seg.right - dp(4f), seg.bottom - dp(4f))
                 canvas.drawRoundRect(r, r.height() / 2, r.height() / 2, fill)
             }
@@ -432,7 +479,7 @@ class ModernWalkerView(
                 0 -> chevron(canvas, seg.centerX(), seg.centerY(), dp(9f), left = true, color = color)
                 2 -> chevron(canvas, seg.centerX(), seg.centerY(), dp(9f), left = false, color = color)
                 else -> {
-                    fill.color = if (pressedButton[1]) color else GREEN
+                    fill.color = if (pressedButton[1]) color else CREAM
                     canvas.drawCircle(seg.centerX(), seg.centerY(), dp(9f), fill)
                 }
             }
@@ -465,6 +512,7 @@ class ModernWalkerView(
                 subtitle = context.getString(R.string.pokewalker_modern_level_route, s.level, s.route)
             }
         }
+        val shortSubtitle = if (s != null && s.hasPokemon && !s.sessionActive && s.route.isNotBlank()) s.route else subtitle
         // no stat cards in the compact arrangement: steps and watts go here instead
         if (compact && s != null && s.open && s.registered && !s.sessionActive) {
             subtitle = context.getString(R.string.pokewalker_modern_compact_stats, numbers.format(s.todaySteps), numbers.format(s.watts.toLong()))
@@ -478,15 +526,25 @@ class ModernWalkerView(
             val iconSize = dp(14f)
             val pw = dp(10f) + iconSize + dp(5f) + bold.measureText(pill) + dp(12f)
             val ph = dp(26f)
-            val pr = RectF(header.right - pw, header.top + dp(6f), header.right, header.top + dp(6f) + ph)
+            val pr = RectF(header.right - pw, header.centerY() - ph / 2, header.right, header.centerY() + ph / 2)
             fill.color = CONTROL
             canvas.drawRoundRect(pr, ph / 2, ph / 2, fill)
-            drawIcon(canvas, R.drawable.ic_pw_steps, pr.left + dp(10f) + iconSize / 2, pr.centerY(), iconSize, GREEN)
-            label(canvas, pill, pr.left + dp(10f) + iconSize + dp(5f), pr.centerY() + sp(12f) * 0.35f, 12f, GREEN, bold)
+            drawIcon(canvas, R.drawable.ic_pw_steps, pr.left + dp(10f) + iconSize / 2, pr.centerY(), iconSize, CREAM)
+            label(canvas, pill, pr.left + dp(10f) + iconSize + dp(5f), pr.centerY() + sp(12f) * 0.35f, 12f, CREAM, bold)
             textRight = pr.left - dp(8f)
         }
-        label(canvas, title, header.left, header.top + sp(20f), 20f, TEXT, bold, maxWidth = textRight - header.left)
-        label(canvas, subtitle, header.left, header.top + sp(20f) + sp(19f), 14f, TEXT_DIM, maxWidth = header.width())
+        // one line: the name, then the details as far as they fit
+        val baseline = header.centerY() + sp(18f) * 0.35f
+        val room = textRight - header.left
+        bold.textSize = sp(18f)
+        val titleW = min(bold.measureText(title), room)
+        label(canvas, title, header.left, baseline, 18f, TEXT, bold, maxWidth = room)
+        val restX = header.left + titleW + dp(8f)
+        if (subtitle.isNotEmpty() && textRight - restX >= dp(48f)) {
+            text.textSize = sp(14f)
+            val details = if (!compact && text.measureText("· $subtitle") > textRight - restX) shortSubtitle else subtitle
+            label(canvas, "· $details", restX, baseline, 14f, TEXT_DIM, maxWidth = textRight - restX)
+        }
     }
 
     private fun chevron(canvas: Canvas, cx: Float, cy: Float, size: Float, left: Boolean, color: Int) {
@@ -520,8 +578,9 @@ class ModernWalkerView(
         canvas.drawArc(oval, 0f, 360f, false, stroke)
         val progress = if (goal > 0) min(1f, steps.toFloat() / goal) else 0f
         if (progress > 0f) {
-            val sweep = SweepGradient(cx, cy, intArrayOf(GREEN, ACCENT, GREEN), floatArrayOf(0f, 0.6f, 1f))
-            val m = Matrix().apply { setRotate(-90f, cx, cy) }
+            // Lucario blue towards cream as the goal comes near
+            val sweep = SweepGradient(cx, cy, intArrayOf(BLUE, BLUE_LIGHT, CREAM), floatArrayOf(0f, 0.55f, 1f))
+            val m = Matrix().apply { setRotate(-100f, cx, cy) } // the round start cap stays blue
             sweep.setLocalMatrix(m)
             stroke.shader = sweep
             stroke.strokeCap = Paint.Cap.ROUND
@@ -542,7 +601,7 @@ class ModernWalkerView(
         val ofY = countY + space + ofPx * 0.72f
         label(canvas, count, cx, countY, countSp, TEXT, bold, Paint.Align.CENTER, maxWidth = hole * 1.8f)
         val dy = ofY - cy
-        val chord = if (hole > dy) 2f * kotlin.math.sqrt(hole * hole - dy * dy) else 0f
+        val chord = if (hole > dy) 2f * sqrt(hole * hole - dy * dy) else 0f
         if (chord >= dp(30f)) {
             val ofSp = fitSp(text, of, chord - dp(4f), 11f, 8f)
             label(canvas, of, cx, ofY, ofSp, TEXT_DIM, align = Paint.Align.CENTER, maxWidth = chord - dp(4f))
@@ -558,7 +617,7 @@ class ModernWalkerView(
         label(canvas, context.getString(R.string.pokewalker_modern_watts), x, wattsCard.top + dp(26f), 13f, TEXT_DIM, bold)
         val iconSize = dp(30f)
         val rowY = wattsCard.top + dp(60f)
-        drawIcon(canvas, R.drawable.ic_pw_bolt, x + iconSize / 2, rowY, iconSize, AMBER)
+        drawIcon(canvas, R.drawable.ic_pw_bolt, x + iconSize / 2, rowY, iconSize, GOLD)
         label(canvas, numbers.format((s?.watts ?: 0).toLong()), x + iconSize + dp(6f), rowY + sp(28f) * 0.35f, 28f, TEXT, bold, maxWidth = innerW - iconSize - dp(6f))
 
         val caught = s?.caught ?: 0
@@ -598,17 +657,19 @@ class ModernWalkerView(
         val barW = min(slot * 0.55f, dp(22f))
         // goal line
         val goalY = bottom - (bottom - top) * (goal.toFloat() / maxValue)
-        stroke.color = TEXT_FAINT
+        stroke.color = RED
+        stroke.alpha = 160
         stroke.strokeWidth = dp(1f)
         stroke.pathEffect = DashPathEffect(floatArrayOf(dp(4f), dp(4f)), 0f)
         canvas.drawLine(left, goalY, right, goalY, stroke)
         stroke.pathEffect = null
+        stroke.alpha = 255
         val today = LocalDays.today()
         for (i in 0 until 8) {
             val cx = left + slot * (i + 0.5f)
             val hBar = ((bottom - top) * (values[i].toFloat() / maxValue)).coerceAtLeast(dp(3f))
-            fill.color = if (i == 7) GREEN else ACCENT
-            fill.alpha = if (i == 7) 255 else 200
+            fill.color = if (i == 7) CREAM else BLUE
+            fill.alpha = if (i == 7) 255 else 210
             canvas.drawRoundRect(RectF(cx - barW / 2, bottom - hBar, cx + barW / 2, bottom), barW / 2, barW / 2, fill)
             fill.alpha = 255
             val day = today - (7 - i)
@@ -624,13 +685,13 @@ class ModernWalkerView(
             val pressed = pressedChip == i
             val dim = i == ACTION_PLAY && !hasGame
             val corner = min(dp(18f), r.height() / 2f)
-            fill.color = if (pressed) ACCENT else CARD
+            fill.color = if (pressed) BLUE else CARD
             canvas.drawRoundRect(r, corner, corner, fill)
             stroke.color = CARD_EDGE
             stroke.strokeWidth = dp(1f)
             canvas.drawRoundRect(r, corner, corner, stroke)
             val textColor = if (pressed) INK else if (dim) TEXT_FAINT else TEXT
-            val iconColor = if (pressed) INK else if (dim) TEXT_FAINT else if (i == ACTION_SYNC) GREEN else ACCENT
+            val iconColor = if (pressed) INK else if (dim) TEXT_FAINT else if (i == ACTION_SYNC) CREAM else BLUE
             val name = context.getString(ACTION_LABELS[i])
             val iconSize = dp(22f)
             bold.textSize = sp(14f)
@@ -656,6 +717,9 @@ class ModernWalkerView(
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        // taps and swipes on the walker's own screen
+        if (gestures.onTouch(event, lcdRect) && event.actionMasked != MotionEvent.ACTION_CANCEL) return true
+
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
                 val index = event.actionIndex

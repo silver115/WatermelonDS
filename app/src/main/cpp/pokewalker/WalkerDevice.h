@@ -48,6 +48,11 @@ public:
     /// 2 Connect, 3 Trainer Card, 4 Pokémon & Items, 5 Settings), as launcher
     /// shortcuts and quick actions do. Ignored while unpaired or connected.
     void OpenApp(int index, s64 nowMs);
+    /// A tap on the screen at walker pixel (x, y), for touchscreens. Picks what is
+    /// under the finger where the screen has something to pick (a bush, a menu
+    /// icon, a slot, a settings row); elsewhere it acts as the button for that
+    /// part of the screen. Returns false when the tap did nothing.
+    bool Touch(int x, int y, s64 nowMs);
 
     /// Shades 0 (lightest) to 3 (darkest), row by row.
     const std::array<u8, Width * Height>& Frame() const { return frame; }

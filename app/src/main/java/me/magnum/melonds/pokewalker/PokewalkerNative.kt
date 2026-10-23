@@ -57,6 +57,9 @@ object PokewalkerNative {
     /** The walker's own screen: jumps into one of its apps (0 Poké Radar, 1 Dowsing, 3 Trainer Card...). */
     external fun deviceOpenApp(index: Int)
 
+    /** The walker's own screen: a tap at walker pixel ([x] 0-95, [y] 0-63). False if it did nothing. */
+    external fun deviceTouch(x: Int, y: Int): Boolean
+
     /** The walker's home screen for widgets (96x64 shades into [frame]). False if the walker isn't open. */
     external fun widgetFrame(frame: ByteArray): Boolean
 }

@@ -496,6 +496,13 @@ void DeviceOpenApp(int index)
     Device(s).OpenApp(index, SteadyMs());
 }
 
+bool DeviceTouch(int x, int y)
+{
+    State& s = S();
+    std::lock_guard<std::mutex> guard(s.lock);
+    return Device(s).Touch(x, y, SteadyMs());
+}
+
 bool WidgetFrame(u8* out, size_t len)
 {
     State& s = S();

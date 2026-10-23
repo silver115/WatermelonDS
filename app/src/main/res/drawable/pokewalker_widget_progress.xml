@@ -1,16 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Steps against the goal: Lucario blue towards cream, like the walker screen's ring. -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:id="@android:id/background">
         <shape>
             <corners android:radius="3dp" />
-            <solid android:color="#FF263049" />
+            <solid android:color="#FF222B41" />
         </shape>
     </item>
     <item android:id="@android:id/progress">
         <clip>
             <shape>
                 <corners android:radius="3dp" />
-                <solid android:color="#FF41D19A" />
+                <gradient
+                    android:angle="0"
+                    android:centerColor="#FF86B9F2"
+                    android:endColor="#FFF2E2A2"
+                    android:startColor="#FF4C8DE0" />
             </shape>
         </clip>
     </item>

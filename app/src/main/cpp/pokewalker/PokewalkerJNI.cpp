@@ -159,6 +159,12 @@ Java_me_magnum_melonds_pokewalker_PokewalkerNative_deviceOpenApp(JNIEnv*, jobjec
 }
 
 JNIEXPORT jboolean JNICALL
+Java_me_magnum_melonds_pokewalker_PokewalkerNative_deviceTouch(JNIEnv*, jobject, jint x, jint y)
+{
+    return pokewalker::ir::DeviceTouch(x, y) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
 Java_me_magnum_melonds_pokewalker_PokewalkerNative_widgetFrame(JNIEnv* env, jobject, jbyteArray out)
 {
     pokewalker::u8 frame[96 * 64];

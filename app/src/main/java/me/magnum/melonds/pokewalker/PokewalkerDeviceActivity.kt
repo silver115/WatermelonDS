@@ -141,7 +141,7 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
 
         val root = LinearLayout(this).apply {
             orientation = if (rail) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
-            setBackgroundColor(0xFF0E1322.toInt())
+            setBackgroundColor(WalkerTheme.BG_TOP)
         }
         if (rail) {
             root.addView(buildRail(), LinearLayout.LayoutParams(dp(64), ViewGroup.LayoutParams.MATCH_PARENT))
@@ -189,7 +189,7 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
         bar.addView(barButton(R.drawable.ic_pw_back, R.string.pokewalker_device_back) { backToMelonDS() })
         val title = TextView(this).apply {
             text = getString(R.string.pokewalker_device_label)
-            setTextColor(0xFFF2F5FA.toInt())
+            setTextColor(WalkerTheme.TEXT)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             setPadding(dp(8), 0, 0, 0)
@@ -202,7 +202,7 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
 
     private fun barButton(icon: Int, description: Int, onClick: () -> Unit): ImageButton = ImageButton(this).apply {
         setImageResource(icon)
-        imageTintList = ColorStateList.valueOf(0xFFF2F5FA.toInt())
+        imageTintList = ColorStateList.valueOf(WalkerTheme.TEXT)
         contentDescription = getString(description)
         val ripple = TypedValue()
         if (theme.resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, ripple, true)) setBackgroundResource(ripple.resourceId)
@@ -238,9 +238,10 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
     private fun applySkin(name: String) {
         content.removeAllViews()
         val next: WalkerSkin = if (name == Pokewalker.SKIN_CLASSIC) {
-            WalkerDeviceView(this) { press(it) }
+            WalkerDeviceView(this, { press(it) }, { x, y -> touch(x, y) })
         } else {
-            ModernWalkerView(this, { press(it) }, { action(it) }).also { it.hasGame = Pokewalker.openGameIntent(this) != null }
+            ModernWalkerView(this, { press(it) }, { action(it) }, { x, y -> touch(x, y) })
+                .also { it.hasGame = Pokewalker.openGameIntent(this) != null }
         }
         skin = next
         content.addView(next.view, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
@@ -260,6 +261,12 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
 
     private fun press(button: Int) {
         PokewalkerNative.devicePress(button)
+        tick()
+    }
+
+    /** A tap on the walker's screen, at walker pixel (x, y). */
+    private fun touch(x: Int, y: Int) {
+        PokewalkerNative.deviceTouch(x, y)
         tick()
     }
 

@@ -19,11 +19,35 @@ interface WalkerSkin {
     fun setStatus(status: WalkerStatus?, stepGoal: Int) {}
 }
 
+/**
+ * Lucario-inspired colours for the walker screen: deep blue-black, Lucario blue, cream
+ * like its chest fur, and a touch of red like its eyes.
+ */
+object WalkerTheme {
+    const val BG_TOP = 0xFF0D1220.toInt()
+    const val BG_BOTTOM = 0xFF14213D.toInt()
+    const val AURA = 0xFF3E7BC4.toInt()
+    const val CARD = 0xFF181E2D.toInt()
+    const val CARD_EDGE = 0xFF29344E.toInt()
+    const val CONTROL = 0xFF222B41.toInt()
+    const val SCREEN_FRAME = 0xFF090D16.toInt()
+    const val INK = 0xFF0D1220.toInt()
+    const val TEXT = 0xFFF3F5FA.toInt()
+    const val TEXT_DIM = 0xFF9AA6BF.toInt()
+    const val TEXT_FAINT = 0xFF5F6B88.toInt()
+    const val BLUE = 0xFF4C8DE0.toInt()
+    const val BLUE_LIGHT = 0xFF86B9F2.toInt()
+    const val CREAM = 0xFFF2E2A2.toInt()
+    const val GOLD = 0xFFF5D47E.toInt()
+    const val RED = 0xFFE2525C.toInt()
+}
+
 /** The walker's four shades as colours, following its shade (contrast) setting. */
 object LcdPalette {
     // lightest to darkest at the default shade setting (4)
     val CLASSIC = intArrayOf(0xFFC6CDB6.toInt(), 0xFF8F987F.toInt(), 0xFF575F4B.toInt(), 0xFF20261B.toInt())
-    val MODERN = intArrayOf(0xFFEAF0F7.toInt(), 0xFFA9B6CB.toInt(), 0xFF56637D.toInt(), 0xFF141B2B.toInt())
+    /** Cream screen with blue and black ink, to go with [WalkerTheme]. */
+    val MODERN = intArrayOf(0xFFF5EDD6.toInt(), 0xFFB8C4D8.toInt(), 0xFF4E6A9E.toInt(), 0xFF161C2C.toInt())
 
     fun forShade(base: IntArray, shade: Int): IntArray {
         // Shade 0 is the lightest picture, 9 the darkest; 4 is the walker's default.

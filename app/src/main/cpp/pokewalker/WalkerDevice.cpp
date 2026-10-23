@@ -428,6 +428,141 @@ void WalkerDevice::OpenApp(int index, s64 nowMs)
     EnterApp(index);
 }
 
+bool WalkerDevice::Touch(int x, int y, s64 nowMs)
+{
+    now = nowMs;
+    RefreshSnapshot(false);
+    if (x < 0 || x >= Width || y < 0 || y >= Height || screen == Screen::Busy) return false;
+
+    auto press = [&](Button b) {
+        Press(b, nowMs);
+        return true;
+    };
+    // the button for that third of the screen
+    Button third = x < 32 ? Button::Left : x >= 64 ? Button::Right : Button::Center;
+
+    // a message on screen: a tap moves it on, as the middle button does
+    if (!messages.empty()) return press(Button::Center);
+
+    switch (screen)
+    {
+    case Screen::Home:
+        if (!snap.registered) return false;
+        if (snap.hasPokemon && x < 64 && y < 48) return press(Button::Center); // the Pokémon reacts
+        return press(Button::Right);                                           // the menu
+
+    case Screen::Menu:
+        if (y < 16) return press(x < 16 ? Button::Left : x >= 80 ? Button::Right : Button::Center);
+        if (y < 48)
+        {
+            // an icon: the first tap picks it (shows its name and cost), a second opens it
+            int i = std::clamp(x / 16, 0, 5);
+            if (i == menuIndex) return press(Button::Center);
+            menuIndex = i;
+            Play(Sound::Move);
+            return true;
+        }
+        return false;
+
+    case Screen::Radar:
+    {
+        if (radarPhase == RadarPhase::Click || radarPhase == RadarPhase::Cloud) return false;
+        static const int bx[4] = {0, 64, 0, 64};
+        static const int by[4] = {0, 0, 24, 24};
+        for (int i = 0; i < 4; i++)
+            if (x >= bx[i] && x < bx[i] + 32 && y >= by[i] && y < by[i] + 24)
+            {
+                radarCursor = i;
+                RadarPress();
+                return true;
+            }
+        return false;
+    }
+
+    case Screen::Battle:
+        if (!choosing) return false;
+        return press(third); // attack / catch / evade, as on the placard
+
+    case Screen::Switch:
+        if (y >= 44 && x >= 64)
+        {
+            switchCursor = 3; // keep what is held
+            SwitchConfirm();
+            return true;
+        }
+        if (y >= 16 && y < 44)
+        {
+            // replacing one is for keeps: the first tap picks it, a second confirms
+            int i = std::clamp(x / 32, 0, 2);
+            if (switchCursor == i)
+            {
+                SwitchConfirm();
+                return true;
+            }
+            switchCursor = i;
+            Play(Sound::Move);
+            return true;
+        }
+        return false;
+
+    case Screen::Dowsing:
+        if (y >= 8 && y < 40)
+        {
+            dowseCursor = std::clamp(x / 16, 0, 5);
+            DowsingPress();
+            return true;
+        }
+        return false;
+
+    case Screen::Connect:
+        return press(Button::Center);
+
+    case Screen::TrainerCard:
+        return press(third); // previous page / back / next page
+
+    case Screen::Inventory:
+        if (y < 16)
+        {
+            int count = (int)InventoryEntries().size();
+            int i = (x - 3) / 9;
+            if (x < 3 || i >= count) return false;
+            inventoryCursor = i;
+            Play(Sound::Move);
+            return true;
+        }
+        return press(third);
+
+    case Screen::Settings:
+        if (y < 20)
+        {
+            settingsRow = 0;
+            pendingVolume = (pendingVolume + 1) % 3; // off, low, high, off...
+            volume = pendingVolume;
+            Play(Sound::Move);
+            return true;
+        }
+        if (y < 44)
+        {
+            settingsRow = 1;
+            pendingShade = std::clamp(pendingShade + (x < 52 ? -1 : 1), 0, 9);
+            shade = pendingShade;
+            Play(Sound::Move);
+            return true;
+        }
+        if (x >= 64)
+        {
+            settingsRow = 2; // the return arrow: save and leave
+            return press(Button::Center);
+        }
+        return false;
+
+    case Screen::Message:
+    case Screen::Busy:
+        return false;
+    }
+    return false;
+}
+
 void WalkerDevice::EnterApp(int index)
 {
     switch (index)

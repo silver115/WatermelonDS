@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Widget background: deep blue-black with a hint of Lucario blue. -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
     <corners android:radius="24dp" />
-    <solid android:color="#F01A2133" />
+    <gradient
+        android:angle="315"
+        android:endColor="#F0182647"
+        android:startColor="#F0101626" />
 </shape>

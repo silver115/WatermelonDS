@@ -17,10 +17,15 @@ import kotlin.math.min
 
 /**
  * Draws the virtual walker: its 96x64 four-shade screen, scaled up with crisp pixels,
- * in a simple handheld body with three buttons (left, middle, right).
+ * in a simple handheld body (in Lucario colours) with three buttons (left, middle, right).
+ * The screen itself can be tapped and swiped too.
  */
 @SuppressLint("ViewConstructor")
-class WalkerDeviceView(context: Context, private val onButton: (Int) -> Unit) : View(context), WalkerSkin {
+class WalkerDeviceView(
+    context: Context,
+    private val onButton: (Int) -> Unit,
+    onScreenTap: (x: Int, y: Int) -> Unit,
+) : View(context), WalkerSkin {
 
     companion object {
         const val LCD_WIDTH = 96
@@ -37,13 +42,18 @@ class WalkerDeviceView(context: Context, private val onButton: (Int) -> Unit) : 
     private val shades = ByteArray(LCD_WIDTH * LCD_HEIGHT)
     private var palette = paletteFor(4)
 
-    private val bodyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFE9E7E1.toInt() }
-    private val bodyEdgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFC9C6BE.toInt(); style = Paint.Style.STROKE }
-    private val bezelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF39404C.toInt() }
+    // Lucario colours: blue body, black screen surround and side buttons, cream middle
+    // button, and a small red light.
+    private val bodyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF3E7BC4.toInt() }
+    private val bodyEdgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF2B5C9E.toInt(); style = Paint.Style.STROKE }
+    private val bezelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF161A24.toInt() }
     private val lcdPaint = Paint().apply { isFilterBitmap = false; isAntiAlias = false }
-    private val buttonPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF39404C.toInt() }
-    private val buttonPressedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF1C2028.toInt() }
-    private val buttonRimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFB9B5AC.toInt(); style = Paint.Style.STROKE }
+    private val buttonPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF1C2030.toInt() }
+    private val buttonPressedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF0B0E16.toInt() }
+    private val middlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = WalkerTheme.CREAM }
+    private val middlePressedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFC9B97E.toInt() }
+    private val buttonRimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF2B5C9E.toInt(); style = Paint.Style.STROKE }
+    private val lightPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = WalkerTheme.RED }
 
     private val body = RectF()
     private val bezel = RectF()
@@ -55,10 +65,14 @@ class WalkerDeviceView(context: Context, private val onButton: (Int) -> Unit) : 
     private var corner = 0f
     private val pressed = BooleanArray(3)
     private val pointerButton = HashMap<Int, Int>()
+    private val gestures = LcdGestures(this, onScreenTap) { button -> onButton(button) }.apply { rippleColor = WalkerTheme.INK }
+    private var lightX = 0f
+    private var lightY = 0f
+    private var lightR = 0f
 
     init {
         isFocusable = true
-        setBackgroundColor(0xFF1D2230.toInt())
+        setBackgroundColor(WalkerTheme.BG_TOP)
         redrawBitmap()
     }
 
@@ -115,6 +129,9 @@ class WalkerDeviceView(context: Context, private val onButton: (Int) -> Unit) : 
         buttonR[1] = 9 * unit
         buttonR[2] = 7 * unit
         buttonRimPaint.strokeWidth = max(1f, unit)
+        lightX = lcd.right.toFloat()
+        lightY = top + 4 * unit
+        lightR = 1.4f * unit
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -123,9 +140,13 @@ class WalkerDeviceView(context: Context, private val onButton: (Int) -> Unit) : 
         canvas.drawRoundRect(body, corner, corner, bodyEdgePaint)
         canvas.drawRoundRect(bezel, corner / 4f, corner / 4f, bezelPaint)
         canvas.drawBitmap(bitmap, src, lcd, lcdPaint)
+        gestures.draw(canvas, lcd)
+        canvas.drawCircle(lightX, lightY, lightR, lightPaint)
         for (i in 0..2) {
             canvas.drawCircle(buttonX[i], buttonY, buttonR[i] + buttonRimPaint.strokeWidth, buttonRimPaint)
-            canvas.drawCircle(buttonX[i], buttonY, buttonR[i], if (pressed[i]) buttonPressedPaint else buttonPaint)
+            val paint = if (i == 1) (if (pressed[i]) middlePressedPaint else middlePaint)
+                        else (if (pressed[i]) buttonPressedPaint else buttonPaint)
+            canvas.drawCircle(buttonX[i], buttonY, buttonR[i], paint)
         }
     }
 
@@ -145,6 +166,9 @@ class WalkerDeviceView(context: Context, private val onButton: (Int) -> Unit) : 
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        // taps and swipes on the walker's own screen
+        if (gestures.onTouch(event, lcd) && event.actionMasked != MotionEvent.ACTION_CANCEL) return true
+
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
                 val index = event.actionIndex
