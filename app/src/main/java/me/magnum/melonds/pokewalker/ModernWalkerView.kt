@@ -5,14 +5,11 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.DashPathEffect
-import android.graphics.LinearGradient
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
-import android.graphics.RadialGradient
 import android.graphics.Rect
 import android.graphics.RectF
-import android.graphics.Shader
 import android.graphics.SweepGradient
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
@@ -22,9 +19,6 @@ import android.view.MotionEvent
 import android.view.View
 import androidx.core.content.ContextCompat
 import me.magnum.melonds.R
-import me.magnum.melonds.pokewalker.WalkerTheme.AURA
-import me.magnum.melonds.pokewalker.WalkerTheme.BG_BOTTOM
-import me.magnum.melonds.pokewalker.WalkerTheme.BG_TOP
 import me.magnum.melonds.pokewalker.WalkerTheme.BLUE
 import me.magnum.melonds.pokewalker.WalkerTheme.BLUE_LIGHT
 import me.magnum.melonds.pokewalker.WalkerTheme.CARD
@@ -40,6 +34,7 @@ import me.magnum.melonds.pokewalker.WalkerTheme.TEXT_DIM
 import me.magnum.melonds.pokewalker.WalkerTheme.TEXT_FAINT
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
+import java.text.DecimalFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.floor
@@ -49,10 +44,11 @@ import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 /**
- * The modern look, in Lucario colours: the walker's screen large and crisp in a card (tap
- * it, or swipe it sideways), a three-way control under it, today's steps against a goal,
- * watts and what the walker holds, the last week as a chart, and one-tap actions.
- * Everything is drawn here; the walker logic is native.
+ * The modern look, in Lucario colours over the route's landscape (drawn behind it by the
+ * screen): the walker's screen large and crisp in a card (tap it, or swipe it sideways), a
+ * three-way control under it, today's steps against a goal with the distance and the goal
+ * streak, watts and what the walker holds, the last week as a chart, and one-tap actions.
+ * Cards are slightly see-through so the landscape shows. The walker logic is native.
  *
  * It arranges itself for the space it gets:
  *  - tall (phones held upright): screen card, steps and watts, the week, actions, stacked;
@@ -125,8 +121,9 @@ class ModernWalkerView(
     private var radius = 0f
     private var compact = false
     private val clip = Path()
-    private var background: Shader? = null
-    private var aura: Shader? = null
+    private val confetti = Confetti(this, context.getString(R.string.pokewalker_goal_reached))
+    private val oneDecimal = DecimalFormat("0.0")
+    private val miles = Locale.getDefault().country in setOf("US", "LR", "MM")
 
     // touch
     private val pressedButton = BooleanArray(3)
@@ -167,6 +164,8 @@ class ModernWalkerView(
         invalidate()
     }
 
+    override fun celebrate() = confetti.start()
+
     private fun redrawLcd() {
         for (i in lcdPixels.indices) lcdPixels[i] = palette[shades[i].toInt() and 3]
         lcd.setPixels(lcdPixels, 0, WalkerDeviceView.LCD_WIDTH, 0, 0, WalkerDeviceView.LCD_WIDTH, WalkerDeviceView.LCD_HEIGHT)
@@ -187,14 +186,7 @@ class ModernWalkerView(
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        background = LinearGradient(0f, 0f, 0f, h.toFloat(), BG_TOP, BG_BOTTOM, Shader.TileMode.CLAMP)
         layoutFor(w.toFloat(), h.toFloat())
-        // a soft blue aura behind the walker's screen
-        val r = max(lcdCard.width(), lcdCard.height()) * 0.85f
-        aura = if (r > 0f) {
-            RadialGradient(lcdCard.centerX(), lcdCard.top + lcdCard.height() * 0.4f, r,
-                intArrayOf(AURA and 0x00FFFFFF or 0x38000000, AURA and 0x00FFFFFF), null, Shader.TileMode.CLAMP)
-        } else null
     }
 
     private fun layoutFor(w: Float, h: Float) {
@@ -399,21 +391,17 @@ class ModernWalkerView(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        fill.shader = background
-        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), fill)
-        fill.shader = aura
-        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), fill)
-        fill.shader = null
-
+        // the route's landscape is drawn behind this view (see RouteSceneDrawable)
         drawScreenCard(canvas)
         drawStepsCard(canvas)
         drawWattsCard(canvas)
         drawWeekCard(canvas)
         drawChips(canvas)
+        confetti.draw(canvas)
     }
 
-    private fun card(canvas: Canvas, r: RectF) {
-        fill.color = CARD
+    private fun card(canvas: Canvas, r: RectF, opacity: Int = 0xE6) {
+        fill.color = (CARD and 0x00FFFFFF) or (opacity shl 24)
         canvas.drawRoundRect(r, radius, radius, fill)
         stroke.color = CARD_EDGE
         stroke.strokeWidth = dp(1f)
@@ -452,7 +440,7 @@ class ModernWalkerView(
     }
 
     private fun drawScreenCard(canvas: Canvas) {
-        card(canvas, lcdCard)
+        card(canvas, lcdCard, 0xF0)
         if (header.height() > 0f) drawHeader(canvas)
 
         // the walker's screen, and where it was touched
@@ -567,7 +555,26 @@ class ModernWalkerView(
         card(canvas, ringCard)
         val s = status
         val steps = s?.todaySteps ?: 0L
-        label(canvas, context.getString(R.string.pokewalker_modern_today), ringCard.left + dp(16f), ringCard.top + dp(26f), 13f, TEXT_DIM, bold)
+        val titleY = ringCard.top + dp(26f)
+        val today = context.getString(R.string.pokewalker_modern_today)
+        label(canvas, today, ringCard.left + dp(16f), titleY, 13f, TEXT_DIM, bold)
+        // the goal streak on the right: days in a row at the goal
+        var right = ringCard.right - dp(14f)
+        val streak = s?.let { goalStreak(it) } ?: 0
+        if (streak >= 2) {
+            val n = streak.toString()
+            bold.textSize = sp(13f)
+            val tw = bold.measureText(n)
+            label(canvas, n, right - tw, titleY, 13f, CREAM, bold)
+            flame(canvas, right - tw - dp(9f), titleY - sp(13f) * 0.35f, dp(13f))
+            right -= tw + dp(22f)
+        }
+        // and how far that is
+        bold.textSize = sp(13f)
+        val distX = ringCard.left + dp(16f) + bold.measureText(today) + dp(6f)
+        if (steps > 0 && right - distX > dp(40f)) {
+            label(canvas, "· " + distance(steps), distX, titleY, 13f, TEXT_FAINT, maxWidth = right - distX)
+        }
         val size = min(ringCard.width() - dp(32f), ringCard.height() - dp(48f))
         val cx = ringCard.centerX()
         val cy = ringCard.top + dp(38f) + (ringCard.height() - dp(38f)) / 2f
@@ -606,6 +613,37 @@ class ModernWalkerView(
             val ofSp = fitSp(text, of, chord - dp(4f), 11f, 8f)
             label(canvas, of, cx, ofY, ofSp, TEXT_DIM, align = Paint.Align.CENTER, maxWidth = chord - dp(4f))
         }
+    }
+
+    /** Days in a row at the goal, counting today once it's reached. */
+    private fun goalStreak(s: WalkerStatus): Int {
+        if (goal <= 0) return 0
+        var n = if (s.todaySteps >= goal) 1 else 0
+        for (day in s.history) {
+            if (day >= goal) n++ else break
+        }
+        return n
+    }
+
+    /** About how far the steps are (0.76 m a step), in km or miles. */
+    private fun distance(steps: Long): String {
+        val metres = steps * 0.762
+        return if (miles) context.getString(R.string.pokewalker_distance_mi, oneDecimal.format(metres / 1609.344))
+        else context.getString(R.string.pokewalker_distance_km, oneDecimal.format(metres / 1000.0))
+    }
+
+    private fun flame(canvas: Canvas, cx: Float, cy: Float, size: Float) {
+        val p = Path().apply {
+            moveTo(cx, cy - size * 0.55f)
+            cubicTo(cx + size * 0.45f, cy - size * 0.1f, cx + size * 0.4f, cy + size * 0.45f, cx, cy + size * 0.5f)
+            cubicTo(cx - size * 0.4f, cy + size * 0.45f, cx - size * 0.45f, cy - size * 0.05f, cx - size * 0.1f, cy - size * 0.2f)
+            cubicTo(cx - size * 0.05f, cy - size * 0.35f, cx + size * 0.02f, cy - size * 0.45f, cx, cy - size * 0.55f)
+            close()
+        }
+        fill.color = RED
+        canvas.drawPath(p, fill)
+        fill.color = GOLD
+        canvas.drawCircle(cx, cy + size * 0.22f, size * 0.2f, fill)
     }
 
     private fun drawWattsCard(canvas: Canvas) {
@@ -685,7 +723,7 @@ class ModernWalkerView(
             val pressed = pressedChip == i
             val dim = i == ACTION_PLAY && !hasGame
             val corner = min(dp(18f), r.height() / 2f)
-            fill.color = if (pressed) BLUE else CARD
+            fill.color = if (pressed) BLUE else (CARD and 0x00FFFFFF) or (0xE6 shl 24)
             canvas.drawRoundRect(r, corner, corner, fill)
             stroke.color = CARD_EDGE
             stroke.strokeWidth = dp(1f)

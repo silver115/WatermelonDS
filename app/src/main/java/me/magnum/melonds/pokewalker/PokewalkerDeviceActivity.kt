@@ -20,6 +20,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.TooltipCompat
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
@@ -46,7 +47,11 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
     }
 
     private lateinit var content: FrameLayout
+    private lateinit var scene: RouteSceneDrawable
     private var railChrome: Boolean? = null
+    private var sceneDrawnAt = 0L
+    private var walkerKey: String? = null
+    private var lastVolume = 2
     private var skin: WalkerSkin? = null
     private val frame = ByteArray(WalkerDeviceView.LCD_WIDTH * WalkerDeviceView.LCD_HEIGHT)
     private var frameShade = 4
@@ -73,6 +78,13 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
         // Opening this screen may be what started the app: make sure the walker is open.
         Pokewalker.applySettings(this)
 
+        scene = RouteSceneDrawable(resources.displayMetrics.density)
+        // the landscape goes right to the edges, behind the status and navigation bars
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        @Suppress("DEPRECATION")
+        window.statusBarColor = android.graphics.Color.TRANSPARENT
+        @Suppress("DEPRECATION")
+        window.navigationBarColor = android.graphics.Color.TRANSPARENT
         buildChrome()
         applySkin(Pokewalker.skin(this))
         pendingApp = intent?.getIntExtra(EXTRA_OPEN_APP, -1) ?: -1
@@ -114,6 +126,7 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
         statusJob = null
         beeper?.release()
         beeper = null
+        PokemonCries.release()
         PokewalkerWidget.updateAll(this)
         PokewalkerTileService.refresh(this)
         super.onPause()
@@ -139,10 +152,12 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
         val skinView = skin?.view
         (skinView?.parent as? ViewGroup)?.removeView(skinView)
 
+        // the route's landscape behind everything, the bars included
         val root = LinearLayout(this).apply {
             orientation = if (rail) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
-            setBackgroundColor(WalkerTheme.BG_TOP)
+            background = scene
         }
+        scene.railSide = rail
         if (rail) {
             root.addView(buildRail(), LinearLayout.LayoutParams(dp(64), ViewGroup.LayoutParams.MATCH_PARENT))
         } else {
@@ -161,6 +176,7 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
         ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
             v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            scene.bottomInset = bars.bottom.toFloat()
             WindowInsetsCompat.CONSUMED
         }
         ViewCompat.requestApplyInsets(root)
@@ -244,6 +260,7 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
                 .also { it.hasGame = Pokewalker.openGameIntent(this) != null }
         }
         skin = next
+        scene.showWalker = name == Pokewalker.SKIN_CLASSIC
         content.addView(next.view, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         if (haveFrame) next.setFrame(frame, frameShade)
         next.setStatus(lastStatus, Pokewalker.stepGoal(this))
@@ -271,6 +288,12 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
     }
 
     private fun tick() {
+        // the landscape's clouds, waves and weather move along at about 15 frames a second
+        val now = android.os.SystemClock.uptimeMillis()
+        if (now - sceneDrawnAt >= 66) {
+            sceneDrawnAt = now
+            scene.invalidateSelf()
+        }
         val flags = PokewalkerNative.deviceFrame(frame)
         val shade = (flags shr 12) and 0xF
         val current = skin ?: return
@@ -280,7 +303,15 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
             current.setFrame(frame, shade)
         }
         val sound = (flags shr 4) and 0xF
-        if (sound != 0) beeper?.play(sound, (flags shr 8) and 0x3)
+        val volume = (flags shr 8) and 0x3
+        lastVolume = volume
+        val cry = (flags ushr 16) and 0x3FF
+        if (cry != 0) {
+            // the Pokémon's own cry from the game; the walker's beep if it can't be read
+            PokemonCries.play(this, cry, volume) { if (sound != 0) beeper?.play(sound, volume) }
+        } else if (sound != 0) {
+            beeper?.play(sound, volume)
+        }
     }
 
     private fun action(which: Int) {
@@ -317,10 +348,35 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
             while (isActive) {
                 val status = withContext(Dispatchers.Default) { runCatching { Pokewalker.status() }.getOrNull() }
                 lastStatus = status
-                skin?.setStatus(status, Pokewalker.stepGoal(this@PokewalkerDeviceActivity))
+                val goal = Pokewalker.stepGoal(this@PokewalkerDeviceActivity)
+                skin?.setStatus(status, goal)
+                updateScene(status)
+                celebrateGoal(status, goal)
                 delay(1000)
             }
         }
+    }
+
+    /** Where the walk is: the route's landscape, and the walking Pokémon's sprite for it. */
+    private suspend fun updateScene(status: WalkerStatus?) {
+        val walking = status != null && status.registered && status.hasPokemon
+        if (walking) scene.scene.setRoute(status!!.routeImage, status.route) else scene.scene.setRoute(0, "")
+        val key = if (walking) "${status!!.species}:${status.strollStartUnix}:${status.route}" else ""
+        if (key == walkerKey) return
+        walkerKey = key
+        scene.walker = if (!walking) null else withContext(Dispatchers.Default) {
+            PokewalkerNative.exportImage()?.let { RouteSceneDrawable.walkerSprite(it, LcdPalette.MODERN) }
+        }
+    }
+
+    /** Confetti (and a happy cry) the first time today's steps reach the goal. */
+    private fun celebrateGoal(status: WalkerStatus?, goal: Int) {
+        if (status == null || !status.registered || goal <= 0 || status.todaySteps < goal) return
+        val today = LocalDays.today()
+        if (Pokewalker.celebratedDay(this) == today) return
+        Pokewalker.setCelebratedDay(this, today)
+        skin?.celebrate()
+        if (status.hasPokemon && status.species > 0) PokemonCries.play(this, status.species, lastVolume) {}
     }
 
     /**

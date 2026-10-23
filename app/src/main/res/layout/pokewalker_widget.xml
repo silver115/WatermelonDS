@@ -1,106 +1,121 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Home-screen widget: the walker's screen, today's steps against the goal, watts, sync. -->
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!-- Home-screen widget: the route's landscape behind the walker's screen, today's steps
+     against the goal, watts, sync. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/pokewalker_widget_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@drawable/pokewalker_widget_bg"
-    android:gravity="center_vertical"
-    android:orientation="horizontal"
-    android:padding="12dp">
+    android:clipToOutline="true">
 
     <ImageView
-        android:id="@+id/pokewalker_widget_lcd"
-        android:layout_width="0dp"
+        android:id="@+id/pokewalker_widget_scene"
+        android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_weight="1.15"
-        android:adjustViewBounds="true"
-        android:background="@drawable/pokewalker_widget_lcd_bg"
-        android:contentDescription="@string/pokewalker_device_label"
-        android:padding="6dp"
-        android:scaleType="fitCenter"
-        android:src="@drawable/ic_pokewalker_device_foreground" />
+        android:importantForAccessibility="no"
+        android:scaleType="centerCrop" />
 
     <LinearLayout
-        android:layout_width="0dp"
+        android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_marginStart="12dp"
-        android:layout_weight="1"
+        android:background="@drawable/pokewalker_widget_scrim"
         android:gravity="center_vertical"
-        android:orientation="vertical">
+        android:orientation="horizontal"
+        android:padding="12dp">
 
-        <TextView
-            android:id="@+id/pokewalker_widget_title"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:ellipsize="end"
-            android:maxLines="1"
-            android:text="@string/pokewalker_device_label"
-            android:textColor="#FF9AA6BF"
-            android:textSize="12sp" />
-
-        <TextView
-            android:id="@+id/pokewalker_widget_steps"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:maxLines="1"
-            android:text="@string/pokewalker_widget_steps_placeholder"
-            android:textColor="#FFF3F5FA"
-            android:textSize="24sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/pokewalker_widget_steps_today"
-            android:textColor="#FF9AA6BF"
-            android:textSize="11sp" />
-
-        <ProgressBar
-            android:id="@+id/pokewalker_widget_goal"
-            style="?android:attr/progressBarStyleHorizontal"
-            android:layout_width="match_parent"
-            android:layout_height="6dp"
-            android:layout_marginTop="4dp"
-            android:max="1000"
-            android:progressDrawable="@drawable/pokewalker_widget_progress" />
+        <ImageView
+            android:id="@+id/pokewalker_widget_lcd"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1.15"
+            android:adjustViewBounds="true"
+            android:background="@drawable/pokewalker_widget_lcd_bg"
+            android:contentDescription="@string/pokewalker_device_label"
+            android:padding="6dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_pokewalker_device_foreground" />
 
         <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginStart="12dp"
+            android:layout_weight="1"
             android:gravity="center_vertical"
-            android:orientation="horizontal">
-
-            <ImageView
-                android:layout_width="16dp"
-                android:layout_height="16dp"
-                android:importantForAccessibility="no"
-                android:src="@drawable/ic_pw_bolt"
-                android:tint="#FFF5D47E" />
+            android:orientation="vertical">
 
             <TextView
-                android:id="@+id/pokewalker_widget_watts"
-                android:layout_width="0dp"
+                android:id="@+id/pokewalker_widget_title"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="4dp"
-                android:layout_weight="1"
+                android:ellipsize="end"
                 android:maxLines="1"
-                android:text="@string/pokewalker_widget_watts_placeholder"
-                android:textColor="#FFF5D47E"
-                android:textSize="14sp"
+                android:text="@string/pokewalker_device_label"
+                android:textColor="#FF9AA6BF"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/pokewalker_widget_steps"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:maxLines="1"
+                android:text="@string/pokewalker_widget_steps_placeholder"
+                android:textColor="#FFF3F5FA"
+                android:textSize="24sp"
                 android:textStyle="bold" />
 
-            <ImageButton
-                android:id="@+id/pokewalker_widget_sync"
-                android:layout_width="32dp"
-                android:layout_height="32dp"
-                android:background="@drawable/pokewalker_widget_button_bg"
-                android:contentDescription="@string/pokewalker_shortcut_sync"
-                android:padding="6dp"
-                android:scaleType="fitCenter"
-                android:src="@drawable/ic_refresh"
-                android:tint="#FFF2E2A2" />
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/pokewalker_widget_steps_today"
+                android:textColor="#FF9AA6BF"
+                android:textSize="11sp" />
+
+            <ProgressBar
+                android:id="@+id/pokewalker_widget_goal"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="6dp"
+                android:layout_marginTop="4dp"
+                android:max="1000"
+                android:progressDrawable="@drawable/pokewalker_widget_progress" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <ImageView
+                    android:layout_width="16dp"
+                    android:layout_height="16dp"
+                    android:importantForAccessibility="no"
+                    android:src="@drawable/ic_pw_bolt"
+                    android:tint="#FFF5D47E" />
+
+                <TextView
+                    android:id="@+id/pokewalker_widget_watts"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="4dp"
+                    android:layout_weight="1"
+                    android:maxLines="1"
+                    android:text="@string/pokewalker_widget_watts_placeholder"
+                    android:textColor="#FFF5D47E"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <ImageButton
+                    android:id="@+id/pokewalker_widget_sync"
+                    android:layout_width="32dp"
+                    android:layout_height="32dp"
+                    android:background="@drawable/pokewalker_widget_button_bg"
+                    android:contentDescription="@string/pokewalker_shortcut_sync"
+                    android:padding="6dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_refresh"
+                    android:tint="#FFF2E2A2" />
+            </LinearLayout>
         </LinearLayout>
     </LinearLayout>
-</LinearLayout>
+</FrameLayout>

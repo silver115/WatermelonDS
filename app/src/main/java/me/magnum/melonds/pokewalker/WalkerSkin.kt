@@ -17,6 +17,9 @@ interface WalkerSkin {
 
     /** Walker numbers for skins that show more than the screen. */
     fun setStatus(status: WalkerStatus?, stepGoal: Int) {}
+
+    /** The day's step goal was just reached: celebrate. */
+    fun celebrate() {}
 }
 
 /**

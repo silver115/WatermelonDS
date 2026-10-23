@@ -525,7 +525,7 @@ int DeviceFrame(u8* out, size_t len)
     WalkerDevice& d = Device(s);
     bool changed = d.Update(SteadyMs());
     if (changed && out && len >= d.Frame().size()) std::memcpy(out, d.Frame().data(), d.Frame().size());
-    return (changed ? 1 : 0) | ((int)d.TakeSound() << 4) | (d.Volume() << 8) | (d.Shade() << 12);
+    return (changed ? 1 : 0) | ((int)d.TakeSound() << 4) | (d.Volume() << 8) | (d.Shade() << 12) | ((d.TakeCry() & 0x3FF) << 16);
 }
 
 int OnGameSend(const u8* data, int len)

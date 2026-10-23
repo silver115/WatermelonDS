@@ -174,6 +174,13 @@ WalkerDevice::Sound WalkerDevice::TakeSound()
     return s;
 }
 
+u16 WalkerDevice::TakeCry()
+{
+    u16 c = cry;
+    cry = 0;
+    return c;
+}
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -262,6 +269,7 @@ void WalkerDevice::Press(Button button, s64 nowMs)
                 homeTalkFace = (int)Rand(6);
                 homeTalkUntil = now + 2500;
                 Play(Sound::Good);
+                Cry(WalkingSpecies());
             }
             return;
         }
@@ -501,6 +509,7 @@ bool WalkerDevice::Touch(int x, int y, s64 nowMs)
             }
             switchCursor = i;
             Play(Sound::Move);
+            if (!switchItems) Cry(CaughtSpecies(i));
             return true;
         }
         return false;
@@ -521,16 +530,28 @@ bool WalkerDevice::Touch(int x, int y, s64 nowMs)
         return press(third); // previous page / back / next page
 
     case Screen::Inventory:
+    {
+        std::vector<Entry> list = InventoryEntries();
         if (y < 16)
         {
-            int count = (int)InventoryEntries().size();
             int i = (x - 3) / 9;
-            if (x < 3 || i >= count) return false;
+            if (x < 3 || i >= (int)list.size()) return false;
             inventoryCursor = i;
             Play(Sound::Move);
             return true;
         }
+        // the Pokémon shown: its cry
+        if (!list.empty() && x >= 30 && x < 66 && y >= 14 && y < 40)
+        {
+            const Entry& e = list[std::min(inventoryCursor, (int)list.size() - 1)];
+            if (e.kind == Entry::Walker || e.kind == Entry::Caught)
+            {
+                Cry(e.id);
+                return true;
+            }
+        }
         return press(third);
+    }
 
     case Screen::Settings:
         if (y < 20)
@@ -685,6 +706,7 @@ void WalkerDevice::StartBattle()
     flashUntil = 0;
     Go(Screen::Battle);
     Play(Sound::Good);
+    Cry(RouteSpecies(radarSlot));
     Queue({{img::RouteMonNames + (u32)radarSlot * NameBytes, 80}, {img::Appeared, 96}, 1600,
            [this]() { choosing = true; }});
 }
@@ -736,6 +758,7 @@ void WalkerDevice::BattleChoose(int action)
                    if ((int)Rand(100) < chance[std::clamp(theirHp, 1, 4) - 1])
                    {
                        Play(Sound::Caught);
+                       Cry(RouteSpecies(radarSlot));
                        Queue({theirName, {img::WasCaught, 96}, 1800, [this]() { Caught(); }});
                    }
                    else
@@ -923,6 +946,17 @@ void WalkerDevice::SaveSettings()
 // ---------------------------------------------------------------------------
 // What the walker holds
 // ---------------------------------------------------------------------------
+
+u16 WalkerDevice::WalkingSpecies() const
+{
+    return rd16le(walker.Image() + ee::RouteInfo + route::Species);
+}
+
+u16 WalkerDevice::RouteSpecies(int slot) const
+{
+    if (slot < 0 || slot > 2) return 0;
+    return rd16le(walker.Image() + ee::RouteInfo + route::Pokemon + slot * 16);
+}
 
 int WalkerDevice::RouteSlotOfSpecies(u16 species) const
 {

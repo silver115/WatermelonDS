@@ -58,6 +58,10 @@ public:
     const std::array<u8, Width * Height>& Frame() const { return frame; }
     /// The most recent sound to play since the last call (None if nothing).
     Sound TakeSound();
+    /// The Pokémon whose cry to play since the last call (national dex number, 0 if none):
+    /// the walking Pokémon when it is talked to, a wild one when it appears or is caught,
+    /// and held ones when tapped.
+    u16 TakeCry();
     /// From the walker's settings byte: 0 off, 1 low, 2 high.
     int Volume() const { return volume; }
     /// From the walker's settings byte: 0..9 (lighter to darker).
@@ -95,6 +99,7 @@ private:
     std::array<u8, Width * Height> shown {};
     bool firstFrame = true;
     Sound sound = Sound::None;
+    u16 cry = 0;
     int volume = 2;
     int shade = 4;
 
@@ -155,6 +160,9 @@ private:
     void RefreshSnapshot(bool force);
     void Go(Screen next);
     void Play(Sound s) { sound = s; }
+    void Cry(u16 species) { if (species >= 1 && species <= 493) cry = species; }
+    u16 WalkingSpecies() const;
+    u16 RouteSpecies(int slot) const;
     u32 Rand(u32 n) { return n ? rng() % n : 0; }
 
     void Queue(Message m);

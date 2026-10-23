@@ -6,15 +6,19 @@ import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.os.Bundle
 import android.util.Log
 import android.widget.RemoteViews
 import me.magnum.melonds.R
 import java.text.NumberFormat
+import java.util.Calendar
 
 /**
- * Home-screen widget: the walker's own screen (walking Pokémon, route, steps), today's
- * steps against the goal, watts, and a sync button. Tapping it opens the walker.
+ * Home-screen widget: the route's landscape (with the sky of the time of day) behind the
+ * walker's own screen (walking Pokémon, route, steps), today's steps against the goal,
+ * watts, and a sync button. Tapping it opens the walker.
  * Refreshed every 30 minutes, by the hourly job, after syncs and when the walker or the
  * emulator is left.
  */
@@ -52,6 +56,7 @@ class PokewalkerWidget : AppWidgetProvider() {
 
             val frame = ByteArray(WalkerDeviceView.LCD_WIDTH * WalkerDeviceView.LCD_HEIGHT)
             val status = runCatching { Pokewalker.status() }.getOrNull()
+            runCatching { scene(status) }.getOrNull()?.let { views.setImageViewBitmap(R.id.pokewalker_widget_scene, it) }
             if (runCatching { PokewalkerNative.widgetFrame(frame) }.getOrDefault(false)) {
                 views.setImageViewBitmap(R.id.pokewalker_widget_lcd, LcdPalette.render(frame, LcdPalette.MODERN, 3))
             }
@@ -84,6 +89,19 @@ class PokewalkerWidget : AppWidgetProvider() {
             views.setOnClickPendingIntent(R.id.pokewalker_widget_lcd, open)
             views.setOnClickPendingIntent(R.id.pokewalker_widget_sync, sync)
             return views
+        }
+
+        /** The route's landscape at this time of day, for the widget's background. */
+        private fun scene(status: WalkerStatus?): Bitmap {
+            val w = 480
+            val h = 220
+            val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            val scene = RouteScene()
+            if (status != null && status.registered && status.hasPokemon) scene.setRoute(status.routeImage, status.route)
+            val cal = Calendar.getInstance()
+            val canvas = AndroidSceneCanvas().apply { canvas = Canvas(bitmap) }
+            scene.paint(canvas, w.toFloat(), h.toFloat(), cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE), 0L)
+            return bitmap
         }
     }
 }

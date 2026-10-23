@@ -29,6 +29,7 @@ object Pokewalker {
     const val KEY_STEP_GOAL = "pokewalker_step_goal"
     const val KEY_SKIN = "pokewalker_device_skin"
     private const val KEY_LAST_GAME_URI = "pokewalker_last_game_uri"
+    private const val KEY_CELEBRATED_DAY = "pokewalker_goal_celebrated_day"
     private const val KEY_LAST_GAME_NAME = "pokewalker_last_game_name"
 
     const val SKIN_MODERN = "modern"
@@ -123,6 +124,16 @@ object Pokewalker {
 
     /** Name of the HeartGold/SoulSilver ROM last started, if any. */
     fun lastGameName(context: Context): String? = prefs(context).getString(KEY_LAST_GAME_NAME, null)
+
+    /** The last local day (see [LocalDays]) whose step goal was celebrated on the walker screen. */
+    fun celebratedDay(context: Context): Long = prefs(context).getLong(KEY_CELEBRATED_DAY, Long.MIN_VALUE)
+
+    fun setCelebratedDay(context: Context, day: Long) {
+        prefs(context).edit().putLong(KEY_CELEBRATED_DAY, day).apply()
+    }
+
+    /** Where the HeartGold/SoulSilver ROM last started is (a content URI), if any. */
+    fun lastGameUri(context: Context): String? = prefs(context).getString(KEY_LAST_GAME_URI, null)
 
     /** Starts the HeartGold/SoulSilver ROM last played in this app, or null if there is none yet. */
     fun openGameIntent(context: Context): Intent? {

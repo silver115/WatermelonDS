@@ -811,6 +811,63 @@ void TestTouch()
     CHECK(rd16le(r.walker.Image() + ee::Caught + 16) == 25);
 }
 
+void TestCries()
+{
+    std::printf("Pokemon cries\n");
+    Rig r;
+    r.Center();                                       // unpaired: nobody to cry
+    CHECK(r.device.TakeCry() == 0);
+    Holdings held;
+    held.caught[0] = 19;
+    held.caught[1] = 16;
+    held.caught[2] = 19;
+    r.Load(BuildWalker(r.factory, true, true, 100, held));
+    r.Center();                                       // talking to the walking Slowpoke
+    CHECK(r.device.TakeCry() == 79);
+    CHECK(r.device.TakeCry() == 0);                   // once per request
+    CHECK(r.device.Touch(20, 20, r.ms));              // tapping it does the same
+    CHECK(r.device.TakeCry() == 79);
+    r.Right();
+    CHECK(r.device.TakeCry() == 0);                   // the menu: no cry
+
+    // Poké Radar: the wild Pikachu cries when it appears and when it is caught
+    r.script = {0, 0};
+    r.Center();
+    r.Wait(1050);
+    r.Center();
+    CHECK(r.device.TakeCry() == 0);
+    r.Wait(1300);
+    CHECK(r.Screen() == "battle");
+    CHECK(r.device.TakeCry() == 25);
+    r.Wait(1700);
+    r.script = {0};
+    r.Center();                                       // catch
+    r.Wait(1350);
+    CHECK(r.device.TakeCry() == 25);
+    r.Wait(1850);
+    CHECK(r.Screen() == "switch");                    // three held
+
+    // switch?: picking a held Pokémon plays its cry
+    CHECK(r.device.Touch(40, 30, r.ms));              // slot 1: Pidgey
+    CHECK(r.device.TakeCry() == 16);
+    CHECK(r.device.Touch(4, 30, r.ms));               // slot 0: Rattata
+    CHECK(r.device.TakeCry() == 19);
+    CHECK(r.device.Touch(90, 56, r.ms));              // keep them all
+    r.device.Update(r.ms);
+    CHECK(r.Screen() == "menu");
+
+    // Pokémon & items: tapping the Pokémon shown
+    for (int i = 0; i < 4; i++) r.Right();            // 0 -> Pokémon & Items
+    r.Center();
+    CHECK(r.Screen() == "inventory");
+    CHECK(r.device.Touch(48, 28, r.ms));              // the walking Slowpoke
+    CHECK(r.device.TakeCry() == 79);
+    r.Right();
+    CHECK(r.device.Touch(48, 28, r.ms));              // the first caught one
+    CHECK(r.device.TakeCry() == 19);
+    CHECK(r.Screen() == "inventory");
+}
+
 void TestChangedFlag()
 {
     std::printf("redraw only when something changed\n");
@@ -836,6 +893,7 @@ int main()
     TestCardInventorySettings();
     TestOpenApp();
     TestTouch();
+    TestCries();
     TestChangedFlag();
     std::printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

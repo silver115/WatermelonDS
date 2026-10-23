@@ -70,11 +70,15 @@ class WalkerDeviceView(
     private var lightY = 0f
     private var lightR = 0f
 
+    private val confetti = Confetti(this, context.getString(me.magnum.melonds.R.string.pokewalker_goal_reached))
+
     init {
+        // the route's landscape shows behind (see RouteSceneDrawable)
         isFocusable = true
-        setBackgroundColor(WalkerTheme.BG_TOP)
         redrawBitmap()
     }
+
+    override fun celebrate() = confetti.start()
 
     /** New picture from the walker (shades 0-3) and the walker's shade setting. */
     override fun setFrame(frame: ByteArray, newShade: Int) {
@@ -148,6 +152,7 @@ class WalkerDeviceView(
                         else (if (pressed[i]) buttonPressedPaint else buttonPaint)
             canvas.drawCircle(buttonX[i], buttonY, buttonR[i], paint)
         }
+        confetti.draw(canvas)
     }
 
     private fun buttonAt(x: Float, y: Float): Int {

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Over the widget's landscape: lighter behind the walker's screen, darker behind the numbers. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <corners android:radius="24dp" />
+    <gradient
+        android:angle="0"
+        android:endColor="#D9101626"
+        android:startColor="#59101626" />
+</shape>

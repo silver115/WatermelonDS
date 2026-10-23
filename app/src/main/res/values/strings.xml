@@ -691,6 +691,9 @@
     <string name="pokewalker_modern_compact_stats">%1$s steps · %2$s W</string>
     <string name="pokewalker_modern_caught">Caught %1$d/3</string>
     <string name="pokewalker_modern_found">Found %1$d/3</string>
+    <string name="pokewalker_goal_reached">Daily goal reached!</string>
+    <string name="pokewalker_distance_km">%1$s km</string>
+    <string name="pokewalker_distance_mi">%1$s mi</string>
     <string name="pokewalker_action_sync">Sync</string>
     <string name="pokewalker_action_radar">Radar</string>
     <string name="pokewalker_action_dowsing">Dowsing</string>

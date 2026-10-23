@@ -28,6 +28,10 @@ data class WalkerStatus(
     val copyCheck: CopyCheck?,
     /** The game loaded in the emulator is HeartGold or SoulSilver. */
     val gameIsPokewalkerCompatible: Boolean = false,
+    /** National dex number of the walking Pokémon (0 when none). */
+    val species: Int = 0,
+    /** The route's picture kind (0 field, 1 forest, 2 suburbs, 3 town, 4 mountain, 5 cave, 6 lake, 7 beach), -1 if unknown. */
+    val routeImage: Int = -1,
 ) {
     companion object {
         fun parse(json: String): WalkerStatus {
@@ -58,6 +62,8 @@ data class WalkerStatus(
                 dowsed = o.optInt("dowsed"),
                 gifted = o.optInt("gifted"),
                 gameIsPokewalkerCompatible = o.optBoolean("gameIsPokewalkerCompatible"),
+                species = pokemon?.optInt("species") ?: 0,
+                routeImage = pokemon?.optInt("routeImage", -1) ?: -1,
                 copyCheck = o.optJSONObject("romCheck")?.let { c ->
                     CopyCheck(
                         release = c.optString("release"),

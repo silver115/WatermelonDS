@@ -47,7 +47,25 @@ the home screen, menu, Poké Radar (rounds of "!", battle, catching, "switch?"),
 dowsing (near/far hints), trainer card, Pokémon & items, settings and connect,
 checking the drawn pixels against the images and what ends up in the walker.
 It also plays every screen by touch (`WalkerDevice::Touch`): tapping bushes,
-menu icons, "switch?" slots, settings rows and the battle placard.
+menu icons, "switch?" slots, settings rows and the battle placard. And it checks
+which Pokémon cry when (`WalkerDevice::TakeCry`): the walking one when talked to,
+a wild one when it appears and when it is caught, held ones when tapped.
+
+## cry (manual)
+
+`CryArchive.kt` reads a Pokémon's cry from the player's own HeartGold/SoulSilver
+ROM (its sound archive). `cry/gen_cry_rom.py` builds a small fake ROM laid out
+the same way (file name table, SDAT with INFO/FAT, banks with a plain, key-split
+and drum-set instrument, wave archives with PCM8, PCM16 and IMA-ADPCM waves, a
+cry sequence with a program change and a transpose) and the samples and rates a
+correct reader must produce:
+
+```sh
+python3 pokewalker-tests/cry/gen_cry_rom.py /tmp/cry.nds /tmp/expect.json
+kotlinc -d /tmp/cry.jar app/src/main/java/me/magnum/melonds/pokewalker/CryArchive.kt pokewalker-tests/cry/CryTest.kt
+java -cp /tmp/cry.jar:$KOTLIN_HOME/lib/kotlin-stdlib.jar CryTestKt /tmp/cry.nds > /tmp/got.json
+python3 pokewalker-tests/cry/check.py /tmp/got.json /tmp/expect.json
+```
 `PW_DEVICE_DUMP=<dir>` writes each checked screen as a `.pgm` picture.
 
 ## game_trace_test (runs in CI)

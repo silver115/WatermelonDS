@@ -65,7 +65,8 @@ void DeviceReset();
 void DevicePress(int button);
 /// Advances and draws the screen; copies the 96x64 shades (0-3, row by row)
 /// into out when the picture changed. Returns flags: bit 0 changed, bits 4-7
-/// sound to play, bits 8-9 volume (0-2), bits 12-15 shade (0-9).
+/// sound to play, bits 8-9 volume (0-2), bits 12-15 shade (0-9), bits 16-25 the
+/// Pokémon whose cry to play (national dex number, 0 for none).
 int DeviceFrame(u8* out, size_t len);
 /// Opens one of the walker's apps directly (see WalkerDevice::OpenApp).
 void DeviceOpenApp(int index);
