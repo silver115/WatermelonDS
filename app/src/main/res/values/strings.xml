@@ -781,6 +781,15 @@
     <string name="pokewalker_reset_summary">Start over with a brand-new, unpaired Pokéwalker</string>
     <string name="pokewalker_reset_confirm">Any Pokémon on a stroll and all unclaimed watts will be lost, and the game will see a new Pokéwalker. Reset?</string>
     <string name="pokewalker_reset_done">Virtual Pokéwalker reset</string>
+    <string name="pokewalker_unpair">Unpair from the game</string>
+    <string name="pokewalker_unpair_summary">Lets HeartGold or SoulSilver pair with this Pokéwalker again, for example when the game says it is already registered. Steps and history stay.</string>
+    <string name="pokewalker_unpair_confirm">The walker forgets which game it belongs to and any Pokémon on a stroll; the watts and finds of this stroll are lost. If that Pokémon isn\'t in your PC, choose “Send Pokémon back home” in the game to get it back. Unpair?</string>
+    <string name="pokewalker_unpair_done">Unpaired. Choose “Go for a Stroll” in the game to pair again.</string>
+    <string name="pokewalker_notice">Pokéwalker: %1$s</string>
+    <string name="pokewalker_the_game">The game</string>
+    <string name="pokewalker_your_pokemon">your Pokémon</string>
+    <string name="pokewalker_unsaved_stroll">%1$s hasn\'t saved yet: go back and let it finish, or it will forget that %2$s went for a stroll.</string>
+    <string name="pokewalker_unsaved_return">%1$s hasn\'t saved yet: go back and let it finish, or it will forget that %2$s came home.</string>
     <string name="pokewalker_error">Pokéwalker: %1$s</string>
     <string name="pokewalker_no_file_picker">No file picker is available on this device</string>
     <string name="pokewalker_health_unsupported">Health Connect is not available on this device</string>

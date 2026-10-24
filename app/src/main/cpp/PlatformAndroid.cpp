@@ -472,6 +472,8 @@ namespace Platform
         auto emulatorInstance = (MelonDSAndroid::MelonInstance*) userdata;
         if (emulatorInstance)
             emulatorInstance->requestNdsSaveWrite(savedata, savelen, writeoffset, writelen);
+        // lets the virtual Pokéwalker know when HeartGold/SoulSilver has saved a transfer
+        pokewalker::ir::OnSaveWrite(writeoffset, writelen, savelen);
     }
 
     void WriteGBASave(const u8* savedata, u32 savelen, u32 writeoffset, u32 writelen, void* userdata)

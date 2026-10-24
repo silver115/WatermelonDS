@@ -221,6 +221,7 @@ class AndroidEmulatorManager(
         MelonEmulator.stopEmulation()
         cameraManager.stopCurrentCameraSource()
         messageQueue.stop()
+        me.magnum.melonds.pokewalker.Pokewalker.onGameStopped()
     }
 
     override fun cleanEmulator() {

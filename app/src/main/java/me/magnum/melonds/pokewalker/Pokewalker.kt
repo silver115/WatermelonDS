@@ -15,8 +15,12 @@ import java.util.Date
 import java.util.TimeZone
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Settings and storage for the infrared Pokéwalker support.
@@ -157,11 +161,64 @@ object Pokewalker {
             return
         }
         prefs(app).edit().putString(KEY_LAST_GAME_URI, romUri).putString(KEY_LAST_GAME_NAME, romName).apply()
+        watchNotices(app)
         if (!autoSyncEnabled(app)) return
         scope.launch {
             val result = WalkerSync.fromHealthConnect(app)
             if (result is WalkerSync.Result.Added) {
                 PokewalkerNative.note("Synced ${result.steps} steps from Health Connect as the game started")
+            }
+        }
+    }
+
+    @Volatile
+    private var noticeJob: Job? = null
+
+    /**
+     * While HeartGold/SoulSilver runs: shows the walker's messages about pairing with the game
+     * (it lost a transfer, "tap CONNECT again"...) right away, over the game.
+     */
+    private fun watchNotices(app: Context) {
+        noticeJob?.cancel()
+        noticeJob = scope.launch {
+            while (isActive) {
+                delay(1000)
+                val text = runCatching { PokewalkerNative.takeNotice() }.getOrNull() ?: continue
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(app, app.getString(R.string.pokewalker_notice, text), Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    /** The emulator stopped. */
+    fun onGameStopped() {
+        noticeJob?.cancel()
+        noticeJob = null
+    }
+
+    /** What the player should do while the game still has to save a transfer, or null. */
+    fun unsavedTransferText(context: Context, status: WalkerStatus?): String? {
+        if (status == null || !status.awaitingGameSave) return null
+        val game = status.pairedWith.ifBlank { context.getString(R.string.pokewalker_the_game) }
+        val name = status.awaitingName.ifBlank { context.getString(R.string.pokewalker_your_pokemon) }
+        return context.getString(
+            if (status.awaitingKind == 3) R.string.pokewalker_unsaved_return else R.string.pokewalker_unsaved_stroll,
+            game,
+            name,
+        )
+    }
+
+    /**
+     * The game screen is going away (another app, the walker screen...): if the game hasn't
+     * saved a transfer yet, say so, because a game closed or rewound now forgets it.
+     */
+    fun onLeavingGame(context: Context) {
+        val app = context.applicationContext
+        scope.launch {
+            val text = unsavedTransferText(app, runCatching { status() }.getOrNull()) ?: return@launch
+            withContext(Dispatchers.Main) {
+                Toast.makeText(app, app.getString(R.string.pokewalker_notice, text), Toast.LENGTH_LONG).show()
             }
         }
     }

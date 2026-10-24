@@ -225,6 +225,8 @@ private:
 
     int Run(u8 operation)
     {
+        // this game is the one in the cartridge slot now
+        w.SetGame(gameVersion == 8 ? 0x45475049u /* "IPGE" */ : 0x454B5049u /* "IPKE" */);
         op = operation;
         step = 0x20;
         result = ResPending;
@@ -544,6 +546,7 @@ static std::string TempPath(const char* name)
     std::snprintf(buf, sizeof(buf), "/tmp/hgss_flow_%d_%s", (int)getpid(), name);
     std::remove(buf);
     std::remove((std::string(buf) + ".meta").c_str());
+    std::remove((std::string(buf) + ".lastwalk").c_str());
     return buf;
 }
 
@@ -595,10 +598,25 @@ static void TestFullStroll(bool compress)
     std::string status = w.StatusJson();
     CHECK(status.find("\"hasPokemon\":true") != std::string::npos);
 
-    // Registering again must be refused with the game's own message
-    CHECK_EQ(hg.Register(), (int)ResAlreadyRegistered);
-    // and starting a second stroll while one is running too
-    CHECK_EQ(hg.StartStroll(), (int)ResAlreadyHasPokemon);
+    // The game saved the transfer (its save now says a Pokémon is out on this walker)
+    w.OnGameSave(false);
+    CHECK(status.find("\"awaitingGameSave\":true") != std::string::npos);
+    CHECK(w.StatusJson().find("\"awaitingGameSave\":false") != std::string::npos);
+
+    // Another save that doesn't know this walker must be refused with the game's own message,
+    // and so must a save that thinks the walker has no Pokémon. (The walker then answers the
+    // way such a save expects for a few minutes, in case it lost the transfer; see TestLost*.)
+    HgssGame stranger(w, clk, 7, 0x0BADF00D);
+    CHECK_EQ(stranger.Register(), (int)ResAlreadyRegistered);
+    clk.unixSec += 6 * 60;
+    CHECK_EQ(stranger.StartStroll(), (int)ResAlreadyHasPokemon);
+    // it tries again: the walker answers as if it had no Pokémon, but it isn't this trainer's walker
+    CHECK_EQ(stranger.StartStroll(), (int)ResWrongWalkerB);
+    // after which the walker answers truthfully again, and nothing changed on it
+    CHECK_EQ(stranger.StartStroll(), (int)ResAlreadyHasPokemon);
+    CHECK_EQ(Ee(w, 0x00ED, 0x68)[0x5B] & 3, 3);
+    CHECK(Ee(w, 0x8F00, 0x28BE) == hg.route);
+    clk.unixSec += 6 * 60;
 
     // Walk, then come home
     std::string e2;
@@ -613,9 +631,7 @@ static void TestFullStroll(bool compress)
     ident = Ee(w, 0x00ED, 0x68);
     CHECK_EQ(ident[0x5B] & 2, 0);               // Pokémon went home
     CHECK_EQ(ident[0x5B] & 1, 1);               // still registered to this game
-
-    // Nothing left to return
-    CHECK_EQ(hg.ReturnFromStroll(), (int)ResNoPokemon);
+    w.OnGameSave(false);
 
     // Next stroll on the now-registered walker
     r = hg.StartStroll();
@@ -666,6 +682,261 @@ static void TestErase()
     CHECK_EQ(Ee(w, 0x00ED, 0x68)[0x5B] & 3, 3);
 }
 
+// What the game's save knows about the walker: POKEWALKER.unk_000 (src/pokewalker.c), 0 none,
+// 1 paired, 2 a Pokémon out on a stroll. The menu picks the flow from it (ov112_021E9338:
+// register while it is 0), the app records a transfer that worked (ov112_021EE628) and then
+// saves (SaveGameNormal), which the walker sees as save memory writes. After a refusal the
+// game offers to try again (message 7, CONNECT), which runs the same flow.
+struct HgssSave
+{
+    int state = 0;
+};
+
+static int GoForStroll(VirtualPokewalker& w, HgssGame& g, HgssSave& s, bool saves = true)
+{
+    int r = s.state == 0 ? g.Register() : g.StartStroll();
+    if (r == ResSuccess)
+    {
+        s.state = 2;
+        if (saves) w.OnGameSave(false);
+    }
+    return r;
+}
+
+static int ComeHome(VirtualPokewalker& w, HgssGame& g, HgssSave& s, bool saves = true)
+{
+    int r = g.ReturnFromStroll();
+    if (r == ResSuccess)
+    {
+        s.state = 1;
+        if (saves) w.OnGameSave(false);
+    }
+    return r;
+}
+
+static u16 CollectedWatts(const HgssGame& g) { return (u16)(g.results[0x0A] << 8 | g.results[0x0B]); }
+
+static void TestLostPairing()
+{
+    std::printf("the game forgot pairing with the walker (rewound after it saved): CONNECT again pairs it\n");
+    Clock clk;
+    VirtualPokewalker w;
+    Setup(w, clk);
+    std::string err;
+    CHECK(w.Open(TempPath("lp.bin"), &err));
+    HgssGame ss(w, clk, 8 /* SoulSilver */, 0x00C0FFEE);
+    HgssSave save;
+    CHECK_EQ(GoForStroll(w, ss, save), (int)ResSuccess);
+    CHECK(w.AddSteps(1000, 0, &err)); // 50 W on the walker since
+    // a save state from before the transfer: the save memory goes back too
+    w.OnGameSave(true);
+    save.state = 0;
+
+    // the Pokémon is in the PC again, and the game says "already registered"...
+    CHECK_EQ(GoForStroll(w, ss, save), (int)ResAlreadyRegistered);
+    std::string note = w.TakeNotice();
+    CHECK(note.find("SoulSilver lost track of this Pokéwalker") != std::string::npos);
+    CHECK(note.find("CONNECT again") != std::string::npos);
+    CHECK(w.TakeNotice().empty());
+    // ... so the player taps CONNECT again (with the same or another Pokémon): paired again
+    ss.route[0] = 133;
+    CHECK_EQ(GoForStroll(w, ss, save), (int)ResSuccess);
+    CHECK_EQ(Ee(w, 0x00ED, 0x68)[0x5B] & 3, 3);
+    CHECK_EQ(Ee(w, 0x8F00, 1)[0], (u8)133);
+    CHECK(Ee(w, 0x8F00, 0x28BE) == ss.route);
+    CHECK(Ee(w, 0xCC00, 0x224) == ss.team);
+    CHECK(w.TakeNotice().find("Back in step with SoulSilver") != std::string::npos);
+    // the steps and watts since the lost transfer stay: the game never collected them
+    std::string status = w.StatusJson();
+    CHECK(status.find("\"watts\":50") != std::string::npos);
+    CHECK(status.find("\"todaySteps\":1000") != std::string::npos);
+    CHECK(status.find("\"pairedWith\":\"SoulSilver\"") != std::string::npos);
+    // and from then on everything works as usual
+    CHECK(w.AddSteps(200, 0, &err));
+    CHECK_EQ(ComeHome(w, ss, save), (int)ResSuccess);
+    CHECK_EQ(CollectedWatts(ss), (u16)60);
+    CHECK_EQ(GoForStroll(w, ss, save), (int)ResSuccess);
+
+    // CONNECT again much later: the walker answers truthfully once more
+    w.OnGameSave(true);
+    save.state = 0;
+    CHECK_EQ(GoForStroll(w, ss, save), (int)ResAlreadyRegistered);
+    clk.unixSec += 6 * 60;
+    CHECK_EQ(GoForStroll(w, ss, save), (int)ResAlreadyRegistered);
+    CHECK_EQ(GoForStroll(w, ss, save), (int)ResSuccess);
+}
+
+static void TestLostStroll()
+{
+    std::printf("the game forgot a stroll start (rewound after it saved): CONNECT again takes the new Pokémon\n");
+    Clock clk;
+    VirtualPokewalker w;
+    Setup(w, clk);
+    std::string err;
+    CHECK(w.Open(TempPath("ls.bin"), &err));
+    HgssGame hg(w, clk, 7, 0x4444);
+    HgssSave save;
+    CHECK_EQ(GoForStroll(w, hg, save), (int)ResSuccess);
+    CHECK_EQ(ComeHome(w, hg, save), (int)ResSuccess);
+    CHECK_EQ(GoForStroll(w, hg, save), (int)ResSuccess);
+    // a catch on the walker, and some watts left
+    CHECK(w.AddSteps(400, 0, &err)); // 20 W
+    int slot = -1;
+    std::string js;
+    CHECK(w.RadarEncounter(&slot, &js, &err)); // 10 W
+    CHECK(w.StoreCaught(slot, &err));
+    w.OnGameSave(true);
+    save.state = 1;
+
+    CHECK_EQ(GoForStroll(w, hg, save), (int)ResAlreadyHasPokemon);
+    CHECK(w.TakeNotice().find("lost track of") != std::string::npos);
+    CHECK_EQ(GoForStroll(w, hg, save), (int)ResSuccess);
+    // the game collected the walker's watts as the stroll started; the catch waits for the return
+    CHECK_EQ(CollectedWatts(hg), (u16)10);
+    CHECK(w.StatusJson().find("\"caught\":1") != std::string::npos);
+    CHECK_EQ(ComeHome(w, hg, save), (int)ResSuccess);
+    CHECK(rd16(&hg.results[0x0C]) != 0); // the caught Pokémon came home too
+}
+
+static void TestLostBeforeSave()
+{
+    std::printf("the game was reset, rewound or closed before it saved a transfer: right on the first try\n");
+    for (int how = 0; how < 3; how++)
+    {
+        static const char* names[] = {"lb0.bin", "lb1.bin", "lb2.bin"};
+        std::printf("  (%s)\n", how == 0 ? "game reset" : how == 1 ? "save state loaded" : "app closed");
+        Clock clk;
+        VirtualPokewalker w;
+        Setup(w, clk);
+        std::string err, path = TempPath(names[how]);
+        CHECK(w.Open(path, &err));
+        HgssGame hg(w, clk, 7, 0x1111);
+        HgssSave save;
+        auto lose = [&]() {
+            if (how == 0) w.OnCartReset();
+            else if (how == 1) w.OnGameSave(true);
+            else { w.Close(); CHECK(w.Open(path, &err)); }
+        };
+
+        // paired and out on a stroll, but the game never saved it
+        CHECK_EQ(GoForStroll(w, hg, save, false), (int)ResSuccess);
+        CHECK(w.StatusJson().find("\"awaitingGameSave\":true") != std::string::npos);
+        lose();
+        save.state = 0;
+        CHECK(w.StatusJson().find("\"awaitingGameSave\":false") != std::string::npos);
+        CHECK(w.TakeNotice().find("didn't save the transfer") != std::string::npos);
+        CHECK_EQ(GoForStroll(w, hg, save), (int)ResSuccess);
+
+        // a stroll start, the same way
+        CHECK_EQ(ComeHome(w, hg, save), (int)ResSuccess);
+        CHECK_EQ(GoForStroll(w, hg, save, false), (int)ResSuccess);
+        lose();
+        save.state = 1;
+        CHECK_EQ(GoForStroll(w, hg, save), (int)ResSuccess);
+
+        // a return, the same way: the walker brings the stroll back
+        CHECK(w.AddSteps(400, 0, &err)); // 20 W
+        CHECK_EQ(ComeHome(w, hg, save, false), (int)ResSuccess);
+        CHECK_EQ(Ee(w, 0x00ED, 0x68)[0x5B] & 2, 0);
+        CHECK(w.AddSteps(100, 0, &err)); // 5 W walked since
+        lose();
+        save.state = 2;
+        CHECK_EQ(Ee(w, 0x00ED, 0x68)[0x5B] & 3, 3);
+        CHECK_EQ(Ee(w, 0x8F00, 1)[0], hg.route[0]);
+        CHECK(w.TakeNotice().find("Return from a Stroll again") != std::string::npos);
+        CHECK(w.StatusJson().find("\"todaySteps\":") != std::string::npos);
+        CHECK_EQ(ComeHome(w, hg, save), (int)ResSuccess);
+        CHECK_EQ(CollectedWatts(hg), (u16)25); // the stroll's 20 W again, and the 5 W since
+    }
+}
+
+static void TestLostReturn()
+{
+    std::printf("the game forgot a return (rewound after it saved): the walker brings the stroll back\n");
+    Clock clk;
+    VirtualPokewalker w;
+    Setup(w, clk);
+    std::string err;
+    CHECK(w.Open(TempPath("lr.bin"), &err));
+    HgssGame hg(w, clk, 7, 0x5555);
+    HgssSave save;
+    CHECK_EQ(GoForStroll(w, hg, save), (int)ResSuccess);
+    CHECK(w.AddSteps(600, 0, &err)); // 30 W
+    CHECK_EQ(ComeHome(w, hg, save), (int)ResSuccess);
+    CHECK_EQ(CollectedWatts(hg), (u16)30);
+    w.OnGameSave(true);
+    save.state = 2;
+    // "There are not any Pokémon on this Pokéwalker." ... then CONNECT again brings it home
+    CHECK_EQ(ComeHome(w, hg, save), (int)ResNoPokemon);
+    CHECK(w.TakeNotice().find("brought its stroll back") != std::string::npos);
+    CHECK_EQ(ComeHome(w, hg, save), (int)ResSuccess);
+    CHECK_EQ(CollectedWatts(hg), (u16)30);
+    // every lost return can be brought back: the walker keeps a copy of its last stroll...
+    w.OnGameSave(true);
+    save.state = 2;
+    CHECK_EQ(ComeHome(w, hg, save), (int)ResNoPokemon);
+    CHECK_EQ(ComeHome(w, hg, save), (int)ResSuccess);
+    // ...until it starts over; then the game's "Send Pokémon back home" is the way
+    CHECK(w.Unpair(&err));
+    save.state = 2;
+    CHECK_EQ(ComeHome(w, hg, save), (int)ResNotRegistered);
+    CHECK(w.TakeNotice().find("Send Pokémon back home") != std::string::npos);
+}
+
+static void TestWrongGuess()
+{
+    std::printf("the walker thought the game lost a transfer, but it hadn't: one refusal, then normal\n");
+    Clock clk;
+    VirtualPokewalker w;
+    Setup(w, clk);
+    std::string err;
+    CHECK(w.Open(TempPath("wg.bin"), &err));
+    HgssGame hg(w, clk, 7, 0x2222);
+    HgssSave save;
+    CHECK_EQ(GoForStroll(w, hg, save, false), (int)ResSuccess);
+    w.OnCartReset(); // say the game had saved after all, without the walker noticing
+    CHECK_EQ(ComeHome(w, hg, save), (int)ResNotRegistered);
+    CHECK(w.TakeNotice().find("guessed wrong") != std::string::npos);
+    CHECK_EQ(ComeHome(w, hg, save), (int)ResSuccess);
+}
+
+static void TestOtherVersionAndUnpair()
+{
+    std::printf("paired with HeartGold, SoulSilver can't take it over; Unpair keeps the steps\n");
+    Clock clk;
+    VirtualPokewalker w;
+    Setup(w, clk);
+    std::string err;
+    CHECK(w.Open(TempPath("ou.bin"), &err));
+    HgssGame hg(w, clk, 7, 0x3333);
+    HgssGame ss(w, clk, 8, 0x3333);
+    HgssSave hgSave, ssSave;
+    CHECK_EQ(GoForStroll(w, hg, hgSave, false), (int)ResSuccess);
+    // HeartGold lost it (so the walker would pair with HeartGold again), but SoulSilver connects
+    w.OnCartReset();
+    CHECK_EQ(GoForStroll(w, ss, ssSave), (int)ResAlreadyRegistered);
+    CHECK(w.TakeNotice().find("paired with HeartGold") != std::string::npos);
+    CHECK_EQ(GoForStroll(w, ss, ssSave), (int)ResAlreadyRegistered);
+    CHECK_EQ(Ee(w, 0x00ED, 0x68)[0x5B] & 3, 3);
+    CHECK(w.StatusJson().find("\"pairedWith\":\"HeartGold\"") != std::string::npos);
+
+    CHECK(w.AddSteps(777, 0, &err));
+    CHECK(w.AddSteps(55, 2, &err));
+    CHECK(w.Unpair(&err));
+    std::string status = w.StatusJson();
+    CHECK(status.find("\"registered\":false") != std::string::npos);
+    CHECK(status.find("\"hasPokemon\":false") != std::string::npos);
+    CHECK(status.find("\"todaySteps\":777") != std::string::npos);
+    CHECK(status.find("\"history\":[0,55,") != std::string::npos);
+    CHECK(status.find("pairedWith") == std::string::npos);
+    CHECK_EQ(GoForStroll(w, ss, ssSave), (int)ResSuccess);
+    CHECK(w.StatusJson().find("\"pairedWith\":\"SoulSilver\"") != std::string::npos);
+    // HeartGold's old fix doesn't come back to haunt the new pairing
+    hgSave.state = 0;
+    CHECK_EQ(GoForStroll(w, hg, hgSave), (int)ResAlreadyRegistered);
+    CHECK_EQ(GoForStroll(w, hg, hgSave), (int)ResAlreadyRegistered);
+}
+
 static void TestUnalignedWrite()
 {
     std::printf("unaligned EEPROM write (command 0x0A)\n");
@@ -711,6 +982,12 @@ int main()
     TestFullStroll(false);
     TestOtherGame();
     TestErase();
+    TestLostPairing();
+    TestLostStroll();
+    TestLostBeforeSave();
+    TestLostReturn();
+    TestWrongGuess();
+    TestOtherVersionAndUnpair();
     TestUnalignedWrite();
     std::printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

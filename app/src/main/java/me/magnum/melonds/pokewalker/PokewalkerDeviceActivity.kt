@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.util.TypedValue
 import android.view.Choreographer
@@ -47,6 +48,10 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
     }
 
     private lateinit var content: FrameLayout
+    private var banner: LinearLayout? = null
+    private var bannerText: TextView? = null
+    private var bannerClose: ImageButton? = null
+    private var dismissedNotice: String? = null
     private lateinit var scene: RouteSceneDrawable
     private var railChrome: Boolean? = null
     private var sceneDrawnAt = 0L
@@ -163,9 +168,13 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
         } else {
             root.addView(buildTopBar(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)))
         }
+        // a note about the game above the walker when there is one, the walker below it
+        val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        column.addView(buildBanner(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         content = FrameLayout(this)
+        column.addView(content, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         root.addView(
-            content,
+            column,
             if (rail) LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
             else LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f),
         )
@@ -180,6 +189,63 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
             WindowInsetsCompat.CONSUMED
         }
         ViewCompat.requestApplyInsets(root)
+    }
+
+    /**
+     * A card for what the player should know about the game: a transfer it still has to save
+     * (until it does, closing or rewinding the game makes it forget), or what the walker did
+     * when the game had lost one.
+     */
+    private fun buildBanner(): View {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(10), dp(4), dp(10))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(14).toFloat()
+                setColor((WalkerTheme.CARD and 0x00FFFFFF) or 0xF2000000.toInt())
+                setStroke(dp(1), (WalkerTheme.GOLD and 0x00FFFFFF) or 0x8C000000.toInt())
+            }
+            visibility = View.GONE
+        }
+        val icon = android.widget.ImageView(this).apply {
+            setImageResource(R.drawable.ic_status_warn)
+            imageTintList = ColorStateList.valueOf(WalkerTheme.GOLD)
+        }
+        card.addView(icon, LinearLayout.LayoutParams(dp(22), dp(22)).apply { marginEnd = dp(12) })
+        val text = TextView(this).apply {
+            setTextColor(WalkerTheme.TEXT)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setLineSpacing(0f, 1.1f)
+        }
+        card.addView(text, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val close = barButton(R.drawable.ic_clear, R.string.close) {
+            dismissedNotice = bannerText?.text?.toString()
+            banner?.visibility = View.GONE
+        }.apply { imageTintList = ColorStateList.valueOf(WalkerTheme.TEXT_DIM) }
+        card.addView(close, LinearLayout.LayoutParams(dp(40), dp(40)))
+        val holder = FrameLayout(this).apply { setPadding(dp(10), dp(8), dp(10), 0) }
+        holder.addView(card, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        banner = card
+        bannerText = text
+        bannerClose = close
+        updateBanner(lastStatus)
+        return holder
+    }
+
+    private fun updateBanner(status: WalkerStatus?) {
+        val card = banner ?: return
+        val unsaved = Pokewalker.unsavedTransferText(this, status)
+        val notice = status?.notice?.takeIf { it.isNotBlank() && it != dismissedNotice }
+        val text = unsaved ?: notice
+        if (text == null) {
+            card.visibility = View.GONE
+            return
+        }
+        if (bannerText?.text?.toString() != text) bannerText?.text = text
+        // the unsaved transfer stays until the game has saved it; a note can be put away
+        bannerClose?.visibility = if (unsaved != null) View.GONE else View.VISIBLE
+        card.visibility = View.VISIBLE
     }
 
     private fun buildRail(): View {
@@ -350,6 +416,7 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
                 lastStatus = status
                 val goal = Pokewalker.stepGoal(this@PokewalkerDeviceActivity)
                 skin?.setStatus(status, goal)
+                updateBanner(status)
                 updateScene(status)
                 celebrateGoal(status, goal)
                 delay(1000)

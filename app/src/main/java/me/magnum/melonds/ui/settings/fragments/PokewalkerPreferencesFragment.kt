@@ -171,6 +171,10 @@ class PokewalkerPreferencesFragment : BasePreferenceFragment(), PreferenceFragme
             launchSafely { logExportLauncher.launch("pokewalker-log.txt") }
             true
         }
+        findPreference<Preference>("pokewalker_unpair")?.setOnPreferenceClickListener {
+            confirm(R.string.pokewalker_unpair, R.string.pokewalker_unpair_confirm) { unpairWalker() }
+            true
+        }
         findPreference<Preference>("pokewalker_reset")?.setOnPreferenceClickListener {
             confirm(R.string.pokewalker_reset, R.string.pokewalker_reset_confirm) { resetWalker() }
             true
@@ -211,13 +215,20 @@ class PokewalkerPreferencesFragment : BasePreferenceFragment(), PreferenceFragme
                     statusPreference.summary = walkingSummary(status)
                 }
                 status.registered -> {
-                    statusPreference.title = getString(R.string.pokewalker_status_idle_title, status.trainer)
+                    val owner = listOf(status.trainer, status.pairedWith).filter { it.isNotBlank() }.joinToString(" · ")
+                    statusPreference.title = getString(R.string.pokewalker_status_idle_title, owner)
                     statusPreference.summary = getString(R.string.pokewalker_status_idle)
                 }
                 else -> {
                     statusPreference.title = getString(R.string.pokewalker_status_unpaired_title)
                     statusPreference.summary = getString(R.string.pokewalker_status_unpaired)
                 }
+            }
+            // what the walker is waiting for, or the last thing it had to say about the game
+            val pairingText = Pokewalker.unsavedTransferText(requireContext(), status) ?: status?.notice?.takeIf { it.isNotBlank() }
+            if (pairingText != null) {
+                val current = statusPreference.summary?.toString()
+                statusPreference.summary = if (current.isNullOrBlank()) pairingText else "$current\n\n$pairingText"
             }
             val copyText = Pokewalker.copyCheckText(requireContext(), status?.copyCheck)
             if (copyText != null) {
@@ -507,6 +518,15 @@ class PokewalkerPreferencesFragment : BasePreferenceFragment(), PreferenceFragme
                 }.getOrDefault(false)
             }
             if (isAdded) toast(getString(if (ok) R.string.pokewalker_exported else R.string.pokewalker_export_failed))
+        }
+    }
+
+    private fun unpairWalker() {
+        lifecycleScope.launch {
+            val error = withContext(Dispatchers.IO) { runCatching { PokewalkerNative.unpairWalker() }.getOrElse { it.message } }
+            if (!isAdded) return@launch
+            toast(if (error == null) getString(R.string.pokewalker_unpair_done) else getString(R.string.pokewalker_error, error))
+            refreshStatus()
         }
     }
 

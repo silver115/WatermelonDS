@@ -401,6 +401,7 @@ void OnCartReset(u32 gamecode, u32 irversion, const u8* rom, u32 romlen)
     std::lock_guard<std::mutex> guard(s.lock);
     s.gamecode = gamecode;
     s.irversion = irversion;
+    s.walker.SetGame(gamecode);
     s.walker.OnCartReset();
     s.trace.Reset(gamecode);
     gTraceActive = s.trace.Active();
@@ -567,6 +568,15 @@ int OnGamePoll(u8* out, int maxLen)
     return n;
 }
 
+void OnSaveWrite(u32 writeOffset, u32 writeLen, u32 saveLen)
+{
+    State& s = S();
+    std::lock_guard<std::mutex> guard(s.lock);
+    if (!IsPokewalkerGame(s.gamecode) || !s.walker.IsOpen()) return;
+    // the game writes its save a page at a time; a save state puts back all of it at once
+    s.walker.OnGameSave(saveLen > 0 && writeOffset == 0 && writeLen >= saveLen);
+}
+
 std::string StatusJson()
 {
     State& s = S();
@@ -599,6 +609,20 @@ bool ResetWalker(std::string* error)
     State& s = S();
     std::lock_guard<std::mutex> guard(s.lock);
     return s.walker.ResetToFactory(error);
+}
+
+bool UnpairWalker(std::string* error)
+{
+    State& s = S();
+    std::lock_guard<std::mutex> guard(s.lock);
+    return s.walker.Unpair(error);
+}
+
+std::string TakeNotice()
+{
+    State& s = S();
+    std::lock_guard<std::mutex> guard(s.lock);
+    return s.walker.IsOpen() ? s.walker.TakeNotice() : std::string();
 }
 
 bool ImportImage(const std::vector<u8>& image, std::string* error)

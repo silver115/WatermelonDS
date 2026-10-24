@@ -26,6 +26,12 @@ reply deadline, the exact EEPROM addresses and sizes it writes and reads
 (including LZ77-compressed 128-byte chunks), and its identity checks (already
 registered, Pokémon present, other game version or trainer).
 
+It also models the game's save (`POKEWALKER.unk_000`: none / paired / out on a stroll,
+which picks the flow) to check that the walker and the game get back in step when the
+game loses a transfer: rewound after saving ("already registered", "already a Pokémon",
+"no Pokémon" — fixed when the player taps CONNECT again), or reset, rewound or closed
+before it saved (fixed on the first try), a wrong guess, the other game version, and Unpair.
+
 ```sh
 ./build/pokewalker-tests/hgss_flow_test
 ```

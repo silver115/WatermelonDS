@@ -12,6 +12,7 @@
 #include <cstring>
 #include <ctime>
 #include <fstream>
+#include <iterator>
 #include <memory>
 #include <random>
 #include <sstream>
@@ -35,6 +36,17 @@ static constexpr s64 kSessionTimeoutMs = 3000;
 static constexpr s64 kPollGapResetMs = 1000;
 static constexpr s64 kCooldownGapMs = 1500;
 static constexpr s64 kCooldownMaxMs = 6000;
+
+// How long the walker keeps answering the way a refusing game expects. After a refusal the
+// game asks the player to try again right away (message 7, then CONNECT), so a short time
+// is enough and another save started later still meets the walker as it really is. A
+// transfer the game is known to have lost is fixed whenever the player next connects.
+static constexpr s64 kHealAfterRefusalSec = 5 * 60;
+static constexpr s64 kHealAfterLossSec = 60LL * 24 * 3600;
+// A copy of the walker as it was before its last return lets a return the game lost be
+// taken back (the game still has the Pokémon out on its stroll).
+static constexpr s64 kLastWalkKeepSec = 60LL * 24 * 3600;
+static const char kLastWalkMagic[8] = {'P', 'W', 'L', 'A', 'S', 'T', 'W', '1'};
 
 static s64 DefaultMonotonicMs()
 {
@@ -107,6 +119,9 @@ bool VirtualPokewalker::Open(const std::string& eepromPath, std::string* error)
     else
     {
         LoadMeta();
+        // The app closed after a transfer the game hadn't saved yet: the game never kept it.
+        if (meta.pending != (u8)Pending::None)
+            TransferLost("closed");
     }
     OnCartReset();
     return true;
@@ -173,7 +188,26 @@ bool VirtualPokewalker::ResetToFactory(std::string* error)
     meta = Meta {};
     meta.dayNumber = localDay(nowUnix());
     SaveMeta();
+    DropLastWalk();
     Log("Virtual Pokewalker reset to factory state");
+    return true;
+}
+
+bool VirtualPokewalker::Unpair(std::string* error)
+{
+    if (!IsOpen()) { if (error) *error = "the virtual Pokewalker is not open"; return false; }
+    if (SessionActive()) { if (error) *error = "the game is connected to the Pokewalker right now"; return false; }
+    RollOverDay();
+    Identity ident = ReadIdentity();
+    std::string was = (ident[id::Flags] & id::FlagRegistered) ? GameName(rd16le(&ident[id::Unk2])) : std::string();
+    // the game's "Erase Pokéwalker records" (0x2C), keeping what the phone counted
+    u8 hist[ee::HistoryDays * 4];
+    store.Read(ee::History, hist, sizeof(hist));
+    DoReset(false, false);
+    store.Write(ee::History, hist, sizeof(hist));
+    store.Sync();
+    Log(was.empty() ? "Unpaired in the app (the walker was not paired)"
+                    : "Unpaired from " + was + " in the app: any game can register this walker now");
     return true;
 }
 
@@ -199,6 +233,7 @@ bool VirtualPokewalker::ImportImage(const std::vector<u8>& image, std::string* e
     if (ident[id::Flags] & id::FlagHasPokemon)
         meta.strollStartUnix = nowUnix(); // steps already on the dump stay; new phone steps count from now
     SaveMeta();
+    DropLastWalk();
     Log("Imported a Pokewalker EEPROM image");
     return true;
 }
@@ -256,7 +291,13 @@ void VirtualPokewalker::LoadMeta()
         s64 value = std::strtoll(line.c_str() + eq + 1, nullptr, 10);
         if (key == "day") meta.dayNumber = value;
         else if (key == "stroll") meta.strollStartUnix = value;
+        else if (key == "heal") meta.heal = (u8)value;
+        else if (key == "healUntil") meta.healUntil = value;
+        else if (key == "pending") meta.pending = (u8)value;
+        else if (key == "pendingAt") meta.pendingUnix = value;
     }
+    if (meta.heal > (u8)Heal::NoPokemon) meta.heal = 0;
+    if (meta.pending > (u8)Pending::Return) meta.pending = 0;
     if (meta.dayNumber < 0)
     {
         meta.dayNumber = localDay(nowUnix());
@@ -274,6 +315,8 @@ void VirtualPokewalker::SaveMeta()
         std::ofstream out(tmp, std::ios::trunc);
         out << "day=" << meta.dayNumber << "\n";
         out << "stroll=" << meta.strollStartUnix << "\n";
+        if (meta.heal) out << "heal=" << (int)meta.heal << "\nhealUntil=" << meta.healUntil << "\n";
+        if (meta.pending) out << "pending=" << (int)meta.pending << "\npendingAt=" << meta.pendingUnix << "\n";
     }
     std::rename(tmp.c_str(), metaPath.c_str());
 }
@@ -437,8 +480,321 @@ std::string VirtualPokewalker::StatusJson()
         js << "}";
     }
     js << ",\"caught\":" << caught << ",\"dowsed\":" << dowsed << ",\"gifted\":" << gifted;
+    if (registered)
+        js << ",\"pairedWith\":\"" << JsonEscape(GameName(rd16le(&ident[id::Unk2]))) << "\"";
+    // a transfer the game still has to save (the player should let it finish)
+    const bool awaiting = meta.pending != (u8)Pending::None && nowUnix() - meta.pendingUnix < 3600;
+    js << ",\"awaitingGameSave\":" << (awaiting ? "true" : "false");
+    if (awaiting)
+        js << ",\"awaitingKind\":" << (int)meta.pending << ",\"awaitingName\":\"" << JsonEscape(StrollName()) << "\"";
+    if (!notice.empty() && nowUnix() - noticeUnix < 3600)
+        js << ",\"notice\":\"" << JsonEscape(notice) << "\"";
     js << "}";
     return js.str();
+}
+
+// ---------------------------------------------------------------------------
+// Keeping the game and the walker in step
+// ---------------------------------------------------------------------------
+
+std::string VirtualPokewalker::GameName(u16 version) const
+{
+    switch (version)
+    {
+    case 7: return "HeartGold";
+    case 8: return "SoulSilver";
+    default: return "the game";
+    }
+}
+
+std::string VirtualPokewalker::StrollName() const
+{
+    u8 routeInfo[route::Size];
+    store.Read(ee::RouteInfo, routeInfo, sizeof(routeInfo));
+    std::string name = DecodeGameText(&routeInfo[route::Nickname], 11);
+    // characters the walker can't show come out as '?': fall back to the species
+    if (name.empty() || name.find('?') != std::string::npos)
+    {
+        u16 species = rd16le(&routeInfo[route::Species]);
+        name = species >= 1 && species <= 493 ? SpeciesName(species) : "";
+    }
+    return name.empty() ? std::string("your Pokémon") : name;
+}
+
+void VirtualPokewalker::SetGame(u32 gamecode)
+{
+    char c2 = (char)((gamecode >> 16) & 0xFF);
+    bool hgss = (gamecode & 0xFFFF) == ('I' | 'P' << 8);
+    gameVersion = !hgss ? 0 : c2 == 'K' ? 7 : c2 == 'G' ? 8 : 0;
+}
+
+void VirtualPokewalker::SetNotice(const std::string& text)
+{
+    notice = text;
+    if (!notice.empty() && notice[0] >= 'a' && notice[0] <= 'z') notice[0] = (char)(notice[0] - 'a' + 'A');
+    noticeUnix = nowUnix();
+    noticeTaken = false;
+    Log("Note for the player: " + text);
+}
+
+std::string VirtualPokewalker::TakeNotice()
+{
+    if (noticeTaken || notice.empty() || nowUnix() - noticeUnix > 3600) return std::string();
+    noticeTaken = true;
+    return notice;
+}
+
+void VirtualPokewalker::ArmHeal(Heal heal, s64 seconds)
+{
+    meta.heal = (u8)heal;
+    meta.healUntil = heal == Heal::None ? 0 : nowUnix() + seconds;
+    SaveMeta();
+}
+
+void VirtualPokewalker::SetPending(Pending kind)
+{
+    meta.pending = (u8)kind;
+    meta.pendingUnix = kind == Pending::None ? 0 : nowUnix();
+    SaveMeta();
+}
+
+void VirtualPokewalker::OnGameSave(bool wholesale)
+{
+    if (!IsOpen() || meta.pending == (u8)Pending::None) return;
+    if (wholesale)
+    {
+        // a save state or rewind replaced the game, save memory and all
+        TransferLost("rewound (a save state was loaded)");
+        return;
+    }
+    Log("The game saved: the last transfer is complete on both sides");
+    SetPending(Pending::None);
+}
+
+void VirtualPokewalker::TransferLost(const char* how)
+{
+    Pending kind = (Pending)meta.pending;
+    SetPending(Pending::None);
+    Identity ident = ReadIdentity();
+    std::string game = GameName(gameVersion ? gameVersion : rd16le(&ident[id::Unk2]));
+    std::string mon = StrollName();
+    switch (kind)
+    {
+    case Pending::Paired:
+    case Pending::Stroll:
+        Log("The game was " + std::string(how) + " before it saved the last transfer, so it doesn't know about it; "
+            "the walker will answer it the way it expects next time");
+        ArmHeal(kind == Pending::Paired ? Heal::Unregistered : Heal::NoPokemon, kHealAfterLossSec);
+        SetNotice(game + " didn't save the transfer, so " + mon + " is still in its PC. "
+                  "Your next stroll will put the walker right.");
+        break;
+    case Pending::Return:
+    {
+        Log("The game was " + std::string(how) + " before it saved the last return");
+        std::string why;
+        if (RestoreLastWalk(&why))
+            SetNotice(game + " didn't save " + StrollName() + "'s return, so the walker has its stroll back. "
+                      "Return from a Stroll again.");
+        else
+            Log("The stroll can't be brought back: " + why);
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+// The game refused the walker after reading its identity (0x36 / 0x44 / 0x56 / 0x64). Its
+// checks (ov112_021E6BF8) tell from the walker's answer why; when the reason is that the game
+// lost a transfer, answer the next identity request the way the game expects.
+void VirtualPokewalker::OnRefused(u8 c)
+{
+    if (!answered) return;
+    Identity ident = ReadIdentity();
+    const bool registered = answeredFlags & id::FlagRegistered;
+    const bool hasPokemon = answeredFlags & id::FlagHasPokemon;
+    const u16 ownerVersion = rd16le(&ident[id::Unk2]);
+    const std::string game = GameName(gameVersion);
+    const std::string owner = GameName(ownerVersion);
+    const bool sameGame = gameVersion == 0 || ownerVersion == 0 || gameVersion == ownerVersion;
+    const std::string trainer = DecodeGameText(&ident[id::TrainerName], 8);
+    const std::string whose = (trainer.empty() || trainer.find('?') != std::string::npos ? std::string("another trainer")
+                                                                                          : trainer) + "'s " + owner;
+    const std::string mon = StrollName();
+    const char* lostWhy = "the game was probably reset, rewound or closed before it saved the last transfer";
+
+    if (healUsed != Heal::None)
+    {
+        // the changed answer didn't suit this game: answer it truthfully next time
+        Log("The game refused the changed answer too; answering truthfully from now on");
+        ArmHeal(Heal::None, 0);
+        SetNotice("Sorry, the walker guessed wrong. Tap CONNECT again.");
+        return;
+    }
+
+    switch (c)
+    {
+    case cmd::NoComplete: // register: "This Pokéwalker has already been registered."
+        if (!registered) break;
+        if (!sameGame)
+        {
+            Log("Refused: " + game + " can't register a walker paired with " + owner);
+            SetNotice("This Pokéwalker is paired with " + owner + ". Erase it there or unpair it in the walker settings first.");
+            break;
+        }
+        Log(game + " says the walker is already registered, but it has no record of it: " + lostWhy);
+        ArmHeal(Heal::Unregistered, kHealAfterRefusalSec);
+        SetNotice(game + " lost track of this Pokéwalker. Tap CONNECT again to pair it again.");
+        break;
+
+    case cmd::NoCompleteAlias1: // stroll
+        if (!registered)
+        {
+            Log("Refused: " + game + " thinks it is paired with this walker, but the walker isn't paired");
+            SetNotice("The walker isn't paired. In the game, erase the Pokéwalker records, then go for a stroll.");
+        }
+        else if (hasPokemon && sameGame)
+        {
+            // "There is already a Pokémon on this Pokéwalker.": the game has no stroll on record
+            Log(game + " says there is already a Pokemon on the walker, but it has no record of that stroll: " + lostWhy);
+            ArmHeal(Heal::NoPokemon, kHealAfterRefusalSec);
+            SetNotice(game + " lost track of " + mon + "'s stroll. Tap CONNECT again to send the new Pokémon.");
+        }
+        else
+        {
+            Log("Refused: the walker belongs to " + whose);
+            SetNotice("This Pokéwalker belongs to " + whose + ". Erase it there or unpair it in the walker settings.");
+        }
+        break;
+
+    case cmd::NoCompleteAlias3: // return
+        if (registered && !hasPokemon)
+        {
+            // "There are not any Pokémon on this Pokéwalker.": the game still has one out
+            Log(game + " still has a Pokemon out on a stroll with this walker, which ended it: the game was probably "
+                       "rewound or closed before it saved the last return");
+            std::string why;
+            if (sameGame && RestoreLastWalk(&why))
+                SetNotice(game + " still had " + StrollName() + " out, so the walker brought its stroll back. "
+                          "Tap CONNECT again.");
+            else
+            {
+                if (!why.empty()) Log("The stroll can't be brought back: " + why);
+                SetNotice("The walker has no Pokémon. Choose \"Send Pokémon back home\" in the game to get yours back.");
+            }
+        }
+        else if (!registered)
+        {
+            Log("Refused: " + game + " has a Pokemon out on this walker, but the walker isn't paired");
+            SetNotice("The walker isn't paired. Choose \"Send Pokémon back home\" in the game to get your Pokémon back.");
+        }
+        else
+        {
+            Log("Refused: the walker belongs to " + whose);
+            SetNotice("This Pokéwalker belongs to " + whose + ", not this game.");
+        }
+        break;
+
+    case cmd::NoCompleteAlias2: // gifts
+        if (!registered)
+            SetNotice("The walker isn't paired with " + game + " yet: go for a stroll first.");
+        break;
+    }
+}
+
+void VirtualPokewalker::SaveLastWalk()
+{
+    std::string path = LastWalkPath();
+    std::string tmp = path + ".tmp";
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        if (!out) return;
+        u8 head[24] {};
+        std::memcpy(head, kLastWalkMagic, 8);
+        s64 times[2] = {nowUnix(), meta.strollStartUnix};
+        for (int t = 0; t < 2; t++)
+            for (int i = 0; i < 8; i++) head[8 + t * 8 + i] = (u8)((u64)times[t] >> (8 * i));
+        out.write(reinterpret_cast<const char*>(head), sizeof(head));
+        out.write(reinterpret_cast<const char*>(store.Data()), ee::Size);
+        if (!out) return;
+    }
+    std::rename(tmp.c_str(), path.c_str());
+}
+
+void VirtualPokewalker::DropLastWalk()
+{
+    if (!store.Path().empty()) std::remove(LastWalkPath().c_str());
+}
+
+bool VirtualPokewalker::RestoreLastWalk(std::string* why)
+{
+    std::ifstream in(LastWalkPath(), std::ios::binary);
+    if (!in) { *why = "there is no copy of it"; return false; }
+    std::vector<u8> file((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (file.size() != 24 + ee::Size || std::memcmp(file.data(), kLastWalkMagic, 8) != 0)
+    {
+        *why = "its copy is damaged";
+        return false;
+    }
+    s64 times[2] = {0, 0};
+    for (int t = 0; t < 2; t++)
+        for (int i = 7; i >= 0; i--) times[t] = (s64)(((u64)times[t] << 8) | file[8 + t * 8 + i]);
+    std::vector<u8> img(file.begin() + 24, file.end());
+
+    auto reliable = [&img](u32 a1, u32 a2, u8* data, size_t len) {
+        // the first copy if its checksum is good, else the second
+        for (u32 a : {a1, a2})
+            if (EepromStore::ReliableChecksum(&img[a], len) == img[a + len]) { std::memcpy(data, &img[a], len); return true; }
+        return false;
+    };
+    auto writeReliable = [&img](u32 a1, u32 a2, const u8* data, size_t len) {
+        u8 chk = EepromStore::ReliableChecksum(data, len);
+        for (u32 a : {a1, a2}) { std::memcpy(&img[a], data, len); img[a + len] = chk; }
+    };
+
+    Identity then {}, now = ReadIdentity();
+    if (!reliable(ee::Identity1, ee::Identity2, then.data(), then.size())) { *why = "its copy is damaged"; return false; }
+    if ((then[id::Flags] & (id::FlagRegistered | id::FlagHasPokemon)) != (id::FlagRegistered | id::FlagHasPokemon))
+    {
+        *why = "the copy has no stroll";
+        return false;
+    }
+    if (!(now[id::Flags] & id::FlagRegistered) || std::memcmp(&then[id::Tid], &now[id::Tid], 4) != 0)
+    {
+        *why = "the walker has been paired again since";
+        return false;
+    }
+    if (nowUnix() - times[0] > kLastWalkKeepSec || nowUnix() < times[0] - 86400)
+    {
+        *why = "it is too old";
+        return false;
+    }
+
+    // the stroll as it was, with what the phone counted since
+    Health hNow = ReadHealth(), hThen {};
+    reliable(ee::Health1, ee::Health2, hThen.data(), hThen.size());
+    Health h = hNow;
+    u32 watts = std::min<u32>(rd16be(&hThen[hd::Watts]) + rd16be(&hNow[hd::Watts]), MaxWatts);
+    wr16be(&h[hd::Watts], (u16)watts);
+    std::memcpy(&h[hd::WalkMinutes], &hThen[hd::WalkMinutes], 2);
+    h[hd::EventLogIndex] = hThen[hd::EventLogIndex];
+    writeReliable(ee::Health1, ee::Health2, h.data(), h.size());
+    wr16be(&img[ee::WattsMirror], (u16)watts);
+    store.Read(ee::History, &img[ee::History], ee::HistoryDays * 4);
+
+    Identity ident = then;
+    std::memcpy(&ident[id::StepCount], &now[id::StepCount], 4);
+    std::memcpy(&ident[id::LastSync], &now[id::LastSync], 4);
+    writeReliable(ee::Identity1, ee::Identity2, ident.data(), ident.size());
+
+    std::string error;
+    if (!store.ReplaceAll(img.data(), img.size(), &error)) { *why = error; return false; }
+    store.Sync();
+    meta.strollStartUnix = times[1] ? times[1] : nowUnix();
+    SaveMeta();
+    DropLastWalk();
+    Log("Brought back the stroll the game lost (" + StrollName() + ")");
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -658,6 +1014,9 @@ void VirtualPokewalker::OnCartReset()
     quietPolls = 0;
     havePeer = false;
     store.Sync();
+    // the game restarted (or another game was loaded) before it saved the last transfer
+    if (IsOpen() && meta.pending != (u8)Pending::None)
+        TransferLost("restarted");
 }
 
 void VirtualPokewalker::OnGameSend(const u8* data, size_t len)
@@ -791,6 +1150,9 @@ void VirtualPokewalker::StartSession(const std::vector<u8>& packet)
     havePeer = false;
     endAfterReply = false;
     listenConnected = true;
+    answered = false;
+    answeredFlags = 0;
+    healUsed = Heal::None;
 
     std::vector<u8> reply = BuildPacket(cmd::SlaveAck, ExtraFromWalker, walkerHalf, nullptr, 0);
     AirScramble(reply.data(), reply.size());
@@ -832,7 +1194,41 @@ void VirtualPokewalker::Handle(const std::vector<u8>& packet)
         wr32be(&ident[id::StepCount], rd32be(&h[hd::TotalSteps]));
         WriteIdentity(ident);
         WriteWattsMirror(rd16be(&h[hd::Watts]));
-        Reply(cmd::IdentityRsp, ExtraFromWalker, ident.data(), ident.size());
+
+        // A game that lost the last transfer only accepts the walker as it was before it.
+        Identity answer = ident;
+        Heal heal = (Heal)meta.heal;
+        healUsed = Heal::None;
+        if (heal != Heal::None && nowUnix() > meta.healUntil)
+        {
+            ArmHeal(Heal::None, 0);
+            heal = Heal::None;
+        }
+        // only for the walker's own game: the other one gets the walker as it really is
+        const u16 ownerVersion = rd16le(&ident[id::Unk2]);
+        if (heal != Heal::None && gameVersion && ownerVersion && gameVersion != ownerVersion)
+        {
+            Log("Not changing the answer for " + GameName(gameVersion) + ": the walker is paired with " + GameName(ownerVersion));
+        }
+        else if (heal == Heal::Unregistered && (ident[id::Flags] & id::FlagRegistered))
+        {
+            answer[id::Flags] &= (u8)~(id::FlagRegistered | id::FlagHasPokemon | id::FlagPokemonJoined);
+            healUsed = heal;
+            Log("Answering as a walker the game can pair with (it lost the last pairing)");
+        }
+        else if (heal == Heal::NoPokemon && (ident[id::Flags] & id::FlagHasPokemon))
+        {
+            answer[id::Flags] &= (u8)~(id::FlagHasPokemon | id::FlagPokemonJoined);
+            healUsed = heal;
+            Log("Answering as a walker without a Pokemon (the game lost the last stroll start)");
+        }
+        else if (heal != Heal::None)
+        {
+            ArmHeal(Heal::None, 0); // nothing left to change
+        }
+        answered = true;
+        answeredFlags = answer[id::Flags];
+        Reply(cmd::IdentityRsp, ExtraFromWalker, answer.data(), answer.size());
         break;
     }
 
@@ -853,6 +1249,13 @@ void VirtualPokewalker::Handle(const std::vector<u8>& packet)
             Identity ident = ReadIdentity();
             wr32be(&ident[id::LastSync], lastSync);
             WriteIdentity(ident);
+        }
+        if (healUsed == Heal::Unregistered && c == cmd::IdentitySend)
+        {
+            Identity ident = ReadIdentity();
+            Log(std::memcmp(&ident[id::Tid], &peer[id::Tid], 4) == 0
+                    ? "The game is pairing with the walker again"
+                    : "Another trainer of this game is pairing with the walker; its old stroll will be replaced");
         }
         Reply((u8)(c + 2), ExtraFromWalker);
         break;
@@ -912,6 +1315,7 @@ void VirtualPokewalker::Handle(const std::vector<u8>& packet)
         store.ReadReliable(ee::UniqueId1, ee::UniqueId2, unique, sizeof(unique));
         Reply(c, ExtraFromWalker, unique, sizeof(unique));
         DoReset(c != cmd::WalkerReset0, c == cmd::WalkerReset3);
+        Log(c == cmd::WalkerReset3 ? "Game erased the Pokewalker (including lifetime steps)" : "Game reset the Pokewalker for pairing");
         break;
     }
 
@@ -936,6 +1340,7 @@ void VirtualPokewalker::Handle(const std::vector<u8>& packet)
     case cmd::NoCompleteAlias2:
     case cmd::NoCompleteAlias3:
         EndSession("game could not complete the operation");
+        OnRefused(c);
         break;
 
     default:
@@ -977,6 +1382,10 @@ void VirtualPokewalker::DoEepromWrite(const std::vector<u8>& packet)
 
 void VirtualPokewalker::DoWalkStart(bool initAfterPairing)
 {
+    // A walker the game pairs with again (or gives a new stroll) after losing the last
+    // transfer keeps what it found and counted since: the game never collected it.
+    const bool carry = healUsed != Heal::None;
+
     u8 marker = 0xA5;
     store.WriteReliable(ee::CopyMarker1, ee::CopyMarker2, &marker, 1);
     store.Copy(ee::RouteArea, ee::ScenarioStaging, ee::RouteAreaSize);
@@ -985,17 +1394,20 @@ void VirtualPokewalker::DoWalkStart(bool initAfterPairing)
     store.WriteReliable(ee::CopyMarker1, ee::CopyMarker2, &marker, 1);
 
     Health h = ReadHealth();
-    if (initAfterPairing)
+    if (initAfterPairing && !carry)
         wr32be(&h[hd::TodaySteps], 0);
     wr16be(&h[hd::WalkMinutes], 0);
     h[hd::EventLogIndex] = 0;
-    wr16be(&h[hd::Watts], 0);
+    // a stroll start (0x52) has just collected the watts (it reads them at 0xCE8A); pairing doesn't
+    if (!(carry && initAfterPairing))
+        wr16be(&h[hd::Watts], 0);
     WriteHealth(h);
-    WriteWattsMirror(0);
+    WriteWattsMirror(rd16be(&h[hd::Watts]));
 
     store.Fill(ee::EventLog, 0, ee::EventLogSize);
     store.Fill(ee::MetPeers, 0, ee::MetPeersSize);
-    store.Fill(ee::Caught, 0, ee::WalkResultsSize);
+    if (!carry)
+        store.Fill(ee::Caught, 0, ee::WalkResultsSize);
 
     Identity ident = ReadIdentity();
     if (havePeer)
@@ -1024,16 +1436,30 @@ void VirtualPokewalker::DoWalkStart(bool initAfterPairing)
     store.Sync();
 
     meta.strollStartUnix = nowUnix();
+    meta.heal = 0;
+    meta.healUntil = 0;
     SaveMeta();
+    // the game still has to save this before it counts on its side
+    SetPending(initAfterPairing ? Pending::Paired : Pending::Stroll);
+    DropLastWalk();
 
     u8 routeInfo[0xBE];
     store.Read(ee::RouteInfo, routeInfo, sizeof(routeInfo));
     u16 species = rd16le(&routeInfo[route::Species]);
-    Log(std::string("Stroll started with ") + SpeciesName(species) + " on " + DecodeGameText(&routeInfo[route::Name], 21));
+    Log(std::string("Stroll started with ") + SpeciesName(species) + " on " + DecodeGameText(&routeInfo[route::Name], 21) +
+        (carry ? (initAfterPairing ? " (paired again; the finds and watts since the lost transfer stay)"
+                                   : " (replacing the stroll the game lost; its finds stay)")
+               : ""));
+    if (carry)
+        SetNotice("Back in step with " + GameName(gameVersion ? gameVersion : rd16le(&peer[id::Unk2])) + ": " +
+                  StrollName() + " is on its stroll.");
 }
 
 void VirtualPokewalker::DoWalkEnd()
 {
+    // kept in case the game loses this return (reset, rewound or closed before it saves)
+    SaveLastWalk();
+
     Identity ident = ReadIdentity();
     wr32le(&ident[id::Unk1], 0);
     wr16le(&ident[id::Unk3], 0);
@@ -1055,6 +1481,7 @@ void VirtualPokewalker::DoWalkEnd()
 
     meta.strollStartUnix = 0;
     SaveMeta();
+    SetPending(Pending::Return);
     Log("Stroll ended; the Pokemon went home");
 }
 
@@ -1109,8 +1536,12 @@ void VirtualPokewalker::DoReset(bool clearEvents, bool clearSteps)
     meta.strollStartUnix = 0;
     if (clearSteps)
         meta.dayNumber = localDay(nowUnix());
+    meta.heal = 0;
+    meta.healUntil = 0;
+    meta.pending = 0;
+    meta.pendingUnix = 0;
     SaveMeta();
-    Log(clearSteps ? "Game erased the Pokewalker (including lifetime steps)" : "Game reset the Pokewalker for pairing");
+    DropLastWalk();
 }
 
 }

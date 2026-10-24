@@ -48,6 +48,12 @@ public:
     // ---- infrared side, driven by the emulated cartridge -----------------------
     /// The cart was reset: forget any half-finished session.
     void OnCartReset();
+    /// The cartridge's game code (IPK* HeartGold, IPG* SoulSilver; 0 = none), used to tell
+    /// the walker's own game from the other one.
+    void SetGame(u32 gamecode);
+    /// The game wrote its save memory. `wholesale`: the whole save was replaced at once
+    /// (a save state or rewind was loaded, or a save imported) rather than written by the game.
+    void OnGameSave(bool wholesale);
     /// The game transmitted one packet (still XOR-scrambled, as on air).
     void OnGameSend(const u8* data, size_t len);
     /// The game polls its receiver. Returns the number of bytes copied to out.
@@ -62,6 +68,11 @@ public:
     bool AddSteps(u32 steps, int daysAgo, std::string* error);
     /// Replaces the image with a fresh, unregistered walker.
     bool ResetToFactory(std::string* error);
+    /// Drops the pairing with the game and any Pokémon on a stroll, like the game's
+    /// "Erase Pokéwalker records", but keeps the step counts and the 7-day history.
+    bool Unpair(std::string* error);
+    /// The latest message for the player about pairing with the game, once (empty: none).
+    std::string TakeNotice();
     bool ImportImage(const std::vector<u8>& image, std::string* error);
     std::vector<u8> ExportImage() const;
 
@@ -115,10 +126,33 @@ public:
 private:
     enum class AirState { Idle, Connected, Cooldown };
 
+    // Keeping the game and the walker in step. A transfer is final for the walker when it
+    // answers the game's last command, but for the game only once it has saved afterwards;
+    // a game that was reset, rewound or closed before saving no longer knows what happened.
+    // The game then refuses the walker ("already registered", "already a Pokémon"...), so
+    // the walker answers its next identity request the way the game expects.
+    enum class Heal : u8
+    {
+        None = 0,
+        Unregistered = 1, // the game lost the pairing: answer as a walker it can register
+        NoPokemon = 2,    // the game lost a stroll start: answer as a walker with no Pokémon
+    };
+    enum class Pending : u8
+    {
+        None = 0,
+        Paired = 1,       // paired and a stroll started (0x38)
+        Stroll = 2,       // a stroll started (0x5A)
+        Return = 3,       // the Pokémon came home (0x4E)
+    };
+
     struct Meta
     {
         s64 dayNumber = -1;       // local day that today's step count belongs to
         s64 strollStartUnix = 0;  // when the current stroll began (0 = none)
+        u8 heal = 0;              // Heal for the next identity answer
+        s64 healUntil = 0;        // ... until then (unix seconds)
+        u8 pending = 0;           // Pending: a transfer the game hasn't saved yet
+        s64 pendingUnix = 0;
     };
 
     using Health = std::array<u8, ee::HealthSize>;
@@ -153,7 +187,27 @@ private:
     Identity peer {};
     bool havePeer = false;
 
+    // pairing health (see Heal)
+    u16 gameVersion = 0;          // running game: 7 HeartGold, 8 SoulSilver, 0 unknown
+    bool answered = false;        // this session answered the game's identity request
+    u8 answeredFlags = 0;         // ... with these identity flags
+    Heal healUsed = Heal::None;   // ... changed this way
+    std::string notice;           // for TakeNotice / StatusJson
+    s64 noticeUnix = 0;
+    bool noticeTaken = true;
+
     void Log(const std::string& msg) const;
+    void SetNotice(const std::string& text);
+    std::string GameName(u16 version) const;
+    std::string StrollName() const;
+    void ArmHeal(Heal heal, s64 seconds);
+    void OnRefused(u8 command);
+    void TransferLost(const char* how);
+    void SetPending(Pending kind);
+    std::string LastWalkPath() const { return store.Path() + ".lastwalk"; }
+    void SaveLastWalk();
+    void DropLastWalk();
+    bool RestoreLastWalk(std::string* why);
 
     // EEPROM structures
     Health ReadHealth() const;

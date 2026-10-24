@@ -24,6 +24,15 @@ object PokewalkerNative {
     /** Returns null on success, otherwise an error message. */
     external fun resetWalker(): String?
 
+    /**
+     * Drops the pairing with the game and any Pokémon on a stroll (like the game's "Erase
+     * Pokéwalker records"), keeping the step counts. Returns null on success, otherwise an error message.
+     */
+    external fun unpairWalker(): String?
+
+    /** A message for the player about pairing with the game, once (null when there is none). */
+    external fun takeNotice(): String?
+
     /** Returns null on success, otherwise an error message. */
     external fun importImage(data: ByteArray): String?
 

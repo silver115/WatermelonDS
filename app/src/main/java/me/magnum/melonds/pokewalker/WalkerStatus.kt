@@ -32,6 +32,18 @@ data class WalkerStatus(
     val species: Int = 0,
     /** The route's picture kind (0 field, 1 forest, 2 suburbs, 3 town, 4 mountain, 5 cave, 6 lake, 7 beach), -1 if unknown. */
     val routeImage: Int = -1,
+    /** "HeartGold" / "SoulSilver" when paired. */
+    val pairedWith: String = "",
+    /**
+     * The walker finished a transfer that the game hasn't saved yet: until it does, a game
+     * that is closed, reset or rewound forgets it. [awaitingKind]: 1 paired, 2 stroll, 3 return.
+     */
+    val awaitingGameSave: Boolean = false,
+    val awaitingKind: Int = 0,
+    /** The Pokémon that transfer was about. */
+    val awaitingName: String = "",
+    /** The latest message about pairing with the game (within the last hour), or "". */
+    val notice: String = "",
 ) {
     companion object {
         fun parse(json: String): WalkerStatus {
@@ -64,6 +76,11 @@ data class WalkerStatus(
                 gameIsPokewalkerCompatible = o.optBoolean("gameIsPokewalkerCompatible"),
                 species = pokemon?.optInt("species") ?: 0,
                 routeImage = pokemon?.optInt("routeImage", -1) ?: -1,
+                pairedWith = o.optString("pairedWith"),
+                awaitingGameSave = o.optBoolean("awaitingGameSave"),
+                awaitingKind = o.optInt("awaitingKind"),
+                awaitingName = o.optString("awaitingName"),
+                notice = o.optString("notice"),
                 copyCheck = o.optJSONObject("romCheck")?.let { c ->
                     CopyCheck(
                         release = c.optString("release"),

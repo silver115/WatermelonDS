@@ -75,6 +75,21 @@ Java_me_magnum_melonds_pokewalker_PokewalkerNative_resetWalker(JNIEnv* env, jobj
 }
 
 JNIEXPORT jstring JNICALL
+Java_me_magnum_melonds_pokewalker_PokewalkerNative_unpairWalker(JNIEnv* env, jobject)
+{
+    std::string error;
+    bool ok = pokewalker::ir::UnpairWalker(&error);
+    return ErrorOrNull(env, ok, error);
+}
+
+JNIEXPORT jstring JNICALL
+Java_me_magnum_melonds_pokewalker_PokewalkerNative_takeNotice(JNIEnv* env, jobject)
+{
+    std::string text = pokewalker::ir::TakeNotice();
+    return text.empty() ? nullptr : env->NewStringUTF(text.c_str());
+}
+
+JNIEXPORT jstring JNICALL
 Java_me_magnum_melonds_pokewalker_PokewalkerNative_importImage(JNIEnv* env, jobject, jbyteArray data)
 {
     std::string error;

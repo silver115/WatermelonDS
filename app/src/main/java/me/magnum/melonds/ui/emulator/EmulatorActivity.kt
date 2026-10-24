@@ -1019,6 +1019,8 @@ class EmulatorActivity : AppCompatActivity() {
         choreographerFrameRenderer.stopRendering()
         emulatorMotionManager.pause()
         viewModel.pauseEmulator(false)
+        // HeartGold/SoulSilver forgets a Pokéwalker transfer it hasn't saved yet
+        if (!isFinishing) me.magnum.melonds.pokewalker.Pokewalker.onLeavingGame(this)
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {

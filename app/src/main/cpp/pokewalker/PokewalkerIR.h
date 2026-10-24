@@ -39,6 +39,9 @@ void Configure(const Config& config);
 void OnCartReset(u32 gamecode, u32 irversion, const u8* rom = nullptr, u32 romlen = 0);
 int OnGameSend(const u8* data, int len);
 int OnGamePoll(u8* out, int maxLen);
+/// The emulated cartridge's save memory was written (melonDS::Platform::WriteNDSSave):
+/// by the game, or all at once when a save state or rewind was loaded.
+void OnSaveWrite(u32 writeOffset, u32 writeLen, u32 saveLen);
 
 /// Called by the frontend after every emulated frame with the DS main RAM and
 /// melonDS's KeyInput, to trace HG/SS screens into the log. Cheap when inactive.
@@ -50,6 +53,10 @@ void SetTouching(bool touching);
 std::string StatusJson();
 bool AddSteps(u32 steps, int daysAgo, std::string* error);
 bool ResetWalker(std::string* error);
+/// Drops the pairing with the game (see VirtualPokewalker::Unpair).
+bool UnpairWalker(std::string* error);
+/// A message for the player about pairing with the game, once; empty when there is none.
+std::string TakeNotice();
 bool ImportImage(const std::vector<u8>& image, std::string* error);
 bool ExportImage(std::vector<u8>* image, std::string* error);
 

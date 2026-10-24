@@ -134,6 +134,13 @@
                 app:iconSpaceReserved="false" />
 
         <Preference
+                android:key="pokewalker_unpair"
+                android:title="@string/pokewalker_unpair"
+                android:summary="@string/pokewalker_unpair_summary"
+                android:persistent="false"
+                app:iconSpaceReserved="false" />
+
+        <Preference
                 android:key="pokewalker_reset"
                 android:title="@string/pokewalker_reset"
                 android:summary="@string/pokewalker_reset_summary"
