@@ -16,26 +16,6 @@ import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.roundToInt
 
-/** The walking Pokémon as the game hands it to the walker: species, form, female, shiny. */
-data class WalkingPokemon(val species: Int, val form: Int, val female: Boolean, val shiny: Boolean) {
-    companion object {
-        /**
-         * From the walker's memory: the route info at 0x8F00 starts with the Pokémon's species,
-         * then at +0x0D its form (bits 0-4) and gender (bits 5-6, 1 = female), at +0x0E bit 1
-         * shiny (how HG/SS fills it in overlay 112).
-         */
-        fun fromImage(image: ByteArray?): WalkingPokemon? {
-            val o = 0x8F00
-            if (image == null || image.size < o + 0x10) return null
-            val species = (image[o].toInt() and 0xFF) or ((image[o + 1].toInt() and 0xFF) shl 8)
-            if (species !in 1..493) return null
-            val v = image[o + 0x0D].toInt() and 0xFF
-            val f = image[o + 0x0E].toInt() and 0xFF
-            return WalkingPokemon(species, v and 0x1F, (v shr 5) and 3 == 1, f and 0x02 != 0)
-        }
-    }
-}
-
 /**
  * The real place of the walk, from the player's own HeartGold/SoulSilver ROM ([FieldMap]), with
  * the walking Pokémon exploring it ([MapWanderer], [MapSpritePainter]). It is drawn in the DS's

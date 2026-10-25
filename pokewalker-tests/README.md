@@ -74,6 +74,30 @@ python3 pokewalker-tests/cry/check.py /tmp/got.json /tmp/expect.json
 ```
 `PW_DEVICE_DUMP=<dir>` writes each checked screen as a `.pgm` picture.
 
+## map (manual)
+
+The walker screen's route map (`NitroFiles.kt`, `SoftRenderer.kt`, `FieldMap.kt`,
+`FollowerSprites.kt`, `MapExplorer.kt`) draws the place in the player's own
+HeartGold/SoulSilver ROM that the walk's course looks like and lets the walking
+Pokémon wander it. `map/gen_map_rom.py` builds a small fake ROM with the field
+files laid out the same way, written from the format notes (no game data): map
+matrices, land data with tile permissions, a background-sound section, buildings,
+a terrain model and BDHC surfaces (one of them a slope), area data with the day
+and the steady cave light, a building list, texture sets, building models (one the
+area doesn't load, one a floating effect layer) and follower sprites with a shiny
+palette. `MapTest.kt` checks which spot is picked, the colours drawn, which tiles
+the Pokémon may stand on and how high, that a cave counts only its own floor, the
+sprite and the walking Pokémon read from the walker's memory, hiding behind the
+house, and three minutes of wandering, being sent somewhere and walked by hand:
+
+```sh
+python3 pokewalker-tests/map/gen_map_rom.py /tmp/map.nds /tmp/map_empty.nds
+P=app/src/main/java/me/magnum/melonds/pokewalker
+kotlinc -d /tmp/map.jar $P/NitroFiles.kt $P/SoftRenderer.kt $P/CryArchive.kt $P/FieldMap.kt \
+    $P/FollowerSprites.kt $P/MapExplorer.kt pokewalker-tests/map/MapTest.kt
+java -cp /tmp/map.jar:$KOTLIN_HOME/lib/kotlin-stdlib.jar MapTestKt /tmp/map.nds /tmp/map_empty.nds
+```
+
 ## game_trace_test (runs in CI)
 
 The screen trace (`GameTrace.cpp`) on a simulated DS main RAM laid out like the
