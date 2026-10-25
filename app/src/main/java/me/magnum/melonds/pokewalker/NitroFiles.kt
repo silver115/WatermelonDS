@@ -84,6 +84,9 @@ object Nitro {
         return List(count) { i -> (p + 4 + i * datumSize) to name(b, names + i * 16) }
     }
 
+    /** (datum offset, name) pairs of the dictionary at [o] (throws [FormatException] when it isn't one). */
+    internal fun dictEntries(b: ByteArray, o: Int, datumSize: Int) = dict(b, o, datumSize)
+
     private fun name(b: ByteArray, o: Int): String {
         var n = 0
         while (n < 16 && b[o + n].toInt() != 0) n++
@@ -471,6 +474,9 @@ object Nitro {
 
     /** Triangles sharing a texture and drawing state, in world space. */
     class Batch(val image: Image?, val alpha: Int, val drawBack: Boolean, val drawFront: Boolean, val mode: Int) {
+        /** The material and texture it was made from (texture animations go by these names). */
+        var materialName: String? = null
+        var textureName: String? = null
         /** Per vertex: x, y, z, u, v (in texels), r, g, b (0..1). */
         var v = FloatArray(8 * 3 * 16)
         var count = 0 // vertices
@@ -535,6 +541,8 @@ object Nitro {
                          texSets: List<TexSet>, lighting: Lighting?, out: MutableList<Batch>) {
         val image = texSets.firstNotNullOfOrNull { it.image(mat.texName, mat.palName, mat.teximage) }
         val batch = Batch(image, mat.alpha, mat.drawBack, mat.drawFront, mat.mode)
+        batch.materialName = mat.name
+        batch.textureName = mat.texName
         var world = startWorld
         val tw = (image?.width ?: mat.width).coerceAtLeast(1)
         val th = (image?.height ?: mat.height).coerceAtLeast(1)

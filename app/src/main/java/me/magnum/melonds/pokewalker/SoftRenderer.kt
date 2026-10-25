@@ -37,6 +37,36 @@ class SoftRenderer(val width: Int, val height: Int) {
 
     private fun translucent(b: Nitro.Batch) = b.alpha in 1..30 || b.image?.translucent == true
 
+    /** Takes the pixels of layers whose texture moves (see [drawCaptured]). */
+    fun interface Capture {
+        /**
+         * A pixel [idx] of a layer in [slot] in front of what's drawn: its texture position
+         * [u], [v] in texels (not wrapped), its vertex colour and 1/w [iw].
+         */
+        fun pixel(idx: Int, slot: Int, u: Float, v: Float, r: Float, g: Float, b: Float, iw: Float)
+    }
+
+    private var capture: Capture? = null
+    private var captureSlot = 0
+
+    /**
+     * Instead of drawing [layers] (textured batches with their slot numbers), hands each of
+     * their pixels that is in front of what's drawn to [capture], so the caller can colour them
+     * again whenever the texture moves.
+     */
+    fun drawCaptured(layers: List<Pair<Nitro.Batch, Int>>, capture: Capture) {
+        this.capture = capture
+        try {
+            for ((b, slot) in layers) {
+                if (b.image == null) continue
+                captureSlot = slot
+                drawBatch(b, false)
+            }
+        } finally {
+            this.capture = null
+        }
+    }
+
     // clip-space vertex: x, y, z, w, u, v, r, g, b
     private val cv = Array(9) { FloatArray(9) }
     private val tmp = Array(9) { FloatArray(9) }
@@ -134,6 +164,13 @@ class SoftRenderer(val width: Int, val height: Int) {
                 var r = (w0 * ra + w1 * rb + w2 * rc) * z
                 var g = (w0 * ga + w1 * gb + w2 * gc) * z
                 var bl = (w0 * ba + w1 * bb + w2 * bc) * z
+                val cap = capture
+                if (cap != null && img != null) {
+                    val u = (w0 * ua + w1 * ub + w2 * uc) * z
+                    val vv = (w0 * va + w1 * vb + w2 * vc) * z
+                    cap.pixel(idx, captureSlot, u * img.width, vv * img.height, r, g, bl, iw)
+                    continue
+                }
                 var alpha = polyA
                 if (img != null) {
                     val u = (w0 * ua + w1 * ub + w2 * uc) * z
@@ -171,12 +208,7 @@ class SoftRenderer(val width: Int, val height: Int) {
         }
     }
 
-    private fun wrap(i: Int, n: Int, repeat: Boolean, mirror: Boolean): Int {
-        if (!repeat) return i.coerceIn(0, n - 1)
-        if (!mirror) return Math.floorMod(i, n)
-        val m = Math.floorMod(i, n * 2)
-        return if (m < n) m else n * 2 - 1 - m
-    }
+    private fun wrap(i: Int, n: Int, repeat: Boolean, mirror: Boolean): Int = wrapTexel(i, n, repeat, mirror)
 
     private fun pack(r: Float, g: Float, b: Float, a: Float): Int {
         val ri = (r.coerceIn(0f, 1f) * 255f + 0.5f).toInt()
@@ -227,4 +259,12 @@ class SoftRenderer(val width: Int, val height: Int) {
             return m
         }
     }
+}
+
+/** A texel coordinate wrapped the way the DS does: clamped, repeated or mirrored. */
+internal fun wrapTexel(i: Int, n: Int, repeat: Boolean, mirror: Boolean): Int {
+    if (!repeat) return i.coerceIn(0, n - 1)
+    if (!mirror) return Math.floorMod(i, n)
+    val m = Math.floorMod(i, n * 2)
+    return if (m < n) m else n * 2 - 1 - m
 }

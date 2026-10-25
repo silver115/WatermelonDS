@@ -1,5 +1,7 @@
 import me.magnum.melonds.pokewalker.CryArchive
+import me.magnum.melonds.pokewalker.FieldAnimations
 import me.magnum.melonds.pokewalker.FieldMap
+import me.magnum.melonds.pokewalker.MapAmbience
 import me.magnum.melonds.pokewalker.FollowerSprites
 import me.magnum.melonds.pokewalker.MapSpritePainter
 import me.magnum.melonds.pokewalker.MapWanderer
@@ -125,6 +127,54 @@ fun main(args: Array<String>) {
     check(scene.tile(32 + 15, 17) == null && scene.tile(32 + 16, 17) == null, "tiles hidden behind the house aren't walkable spots")
     check(scene.tile(32 + 13, 19) != null && scene.tile(32 + 18, 20) != null, "tiles beside the house are")
 
+    // ---- the game's moving textures ----
+    val swaps = FieldAnimations.readSwaps(src)
+    val swap = swaps["sea_on"]
+    check(swap != null && swap.frames.size == 2 && swap.timeline.contentEquals(intArrayOf(0, 0, 0, 1, 1, 1)), "the sea's texture swaps: 2 frames, 3 game frames each")
+    val scrolls = FieldAnimations.readScrolls(src, 0)
+    val scroll = scrolls["sea_on"]
+    check(scroll?.s != null && scroll.t == null && near(scroll.s!![3].toDouble(), 3 / 8.0), "the sea's texture scrolls an eighth a frame across")
+    check(FieldAnimations.readScrolls(src, 0xFFFF).isEmpty(), "no animation number, no scrolls")
+    val anim = scene.animation
+    check(anim != null && anim.size > 500, "the sea moves (${anim?.size} pixels)")
+    val seaAt = scene.project(32 * 16 + 22 * 16 + 8.0, 16.5, 13 * 16 + 8.0)
+    if (anim != null && seaAt != null) {
+        val i = seaAt[1].toInt() * w + seaAt[0].toInt()
+        anim.update(0)
+        val c0 = scene.image[i]
+        check(blue(c0) > red(c0) + 40, "the sea is blue (%06x)".format(c0 and 0xFFFFFF))
+        check(anim.update(1), "a frame later the texture has moved on")
+        check(!anim.update(1), "and the same frame again changes nothing")
+        val seen = HashSet<Int>()
+        for (t in 0L until 8L) { anim.update(t); seen.add(scene.image[i]) }
+        check(seen.size >= 2, "the sea's pixel changes colour as it moves (${seen.size} colours)")
+        anim.update(0)
+        check(scene.image[i] == c0, "and comes back round")
+    }
+    check(scene.waterSpots.size >= 10, "the water's in sight for glints (${scene.waterSpots.size / 2} spots)")
+    check(scene.tiles.values.any { it.tallGrass } && scene.tiles.values.any { !it.tallGrass }, "tiles know their tall grass")
+
+    // ---- little things moving about ----
+    val amb = MapAmbience(scene, Random(4))
+    val dots = ArrayList<MapAmbience.Dot>()
+    val clouds = ArrayList<MapAmbience.Cloud>()
+    var dayDots = 0
+    var dayClouds = 0
+    for (k in 0 until 600) { amb.frame(k * 33L, 12 * 60, dots, clouds); dayDots += dots.size; dayClouds += clouds.size }
+    check(dayDots > 600, "by day things drift by ($dayDots dots in 20 s)")
+    check(dayClouds > 0 && clouds.all { it.alpha in 0.01f..0.5f }, "cloud shadows pass over by day")
+    val night = MapAmbience(scene, Random(4))
+    var glow = 0
+    for (k in 0 until 600) {
+        night.frame(k * 33L, 22 * 60, dots, clouds)
+        check(clouds.isEmpty(), "no cloud shadows at night")
+        glow += dots.count { (it.color and 0xFFFFFF) == 0xD8FF70 }
+    }
+    check(glow > 0, "fireflies at night")
+    amb.rustle(100f, 100f, 30_000L)
+    amb.frame(30_033L, 12 * 60, dots, clouds)
+    check(dots.count { it.x in 90f..110f && it.y in 85f..105f } >= 4, "walking into tall grass shakes it")
+
     // ---- the follower sprite ----
     val idx = FollowerSprites.spriteFor(25, 0, false)
     check(idx == FollowerSprites.spriteFor(25, 0, true) - 1, "Pikachu has a female sprite right after it")
@@ -173,6 +223,11 @@ fun main(args: Array<String>) {
     check(behind < opaque / 2, "behind the house it's hidden ($behind of $opaque shown)")
     painter.paint(MapWanderer.Pose(front.x, front.y, front.z, FollowerSprites.DOWN, 0, MapWanderer.HOP_HEIGHT, false))
     check(painter.buffer.count { it ushr 24 == 0xFF } == opaque, "a hop keeps it whole")
+    painter.paint(MapWanderer.Pose(front.x, front.y, front.z, FollowerSprites.DOWN, 0, 0.0, false, grass = true))
+    val inGrass = painter.buffer.count { it ushr 24 == 0xFF }
+    check(inGrass in 1 until opaque && painter.buffer.none { it == 0x48000000 }, "in tall grass its feet and shadow are hidden ($inGrass of $opaque)")
+    painter.paint(MapWanderer.Pose(front.x, front.y, front.z, FollowerSprites.DOWN, 0, MapWanderer.HOP_HEIGHT, false, grass = true))
+    check(painter.buffer.count { it ushr 24 == 0xFF } == opaque, "hopping out of the grass it's all there")
 
     // ---- wandering ----
     val wanderer = MapWanderer(scene, Random(1))

@@ -244,12 +244,12 @@ object FieldMap {
      * outside or inside, and which light it has ([lightType]: 1 the day's light, 0 a steady
      * light for caves and inside, 2 a dim one for some dungeons).
      */
-    class Area(val buildingSet: Int, val mapTextures: Int, val outdoor: Boolean, val lightType: Int)
+    class Area(val buildingSet: Int, val mapTextures: Int, val outdoor: Boolean, val lightType: Int, val animation: Int = 0xFFFF)
 
     /** Area data (AreaDataManager_Alloc/Load in overlay 1). */
     fun readArea(b: ByteArray): Area {
         if (b.size < 8) throw Nitro.FormatException("area data")
-        return Area(Nitro.u16(b, 0), Nitro.u16(b, 2), b[6].toInt() != 0, Nitro.u8(b, 7))
+        return Area(Nitro.u16(b, 0), Nitro.u16(b, 2), b[6].toInt() != 0, Nitro.u8(b, 7), Nitro.u16(b, 4))
     }
 
     /** An area's building list (`a/0/4/3`): a count, then the building model numbers. */
@@ -363,8 +363,10 @@ object FieldMap {
 
     // ---- the picture ---------------------------------------------------------------------------------
 
-    /** A walkable tile: its world position at the middle of the tile, on the ground. */
-    class Tile(val gx: Int, val gy: Int, val x: Double, val y: Double, val z: Double)
+    /** A walkable tile: its world position at the middle of the tile, on the ground, and its tile behaviour. */
+    class Tile(val gx: Int, val gy: Int, val x: Double, val y: Double, val z: Double, val behavior: Int = 0) {
+        val tallGrass get() = isGrass(behavior)
+    }
 
     /** The drawn area and what the walking Pokémon needs to move around it. */
     class Scene(
@@ -385,6 +387,12 @@ object FieldMap {
         val start: Tile?,
         /** [lightKey] of the light it was drawn with (-1: the area's light never changes). */
         val lightKey: Int,
+        /** The game's moving textures (sea, waves, flowers, rivers), recoloured into [image]; null when nothing moves. */
+        val animation: SceneAnimation? = null,
+        /** Picture positions (x, y pairs) of the water in sight, for sparkles. */
+        val waterSpots: FloatArray = FloatArray(0),
+        /** Lit by the day's light (outside), not a cave's steady one. */
+        val outdoor: Boolean = true,
     ) {
         fun tile(gx: Int, gy: Int): Tile? = tiles[key(gx, gy)]
 
@@ -559,6 +567,12 @@ object FieldMap {
         }
         val light = lighting(minute, lightType)
 
+        // the game's moving textures: swaps for everyone, scrolls per area
+        val swaps = runCatching { FieldAnimations.readSwaps(src) }.getOrDefault(emptyMap())
+        val scrollCache = HashMap<Int, Map<String, FieldAnimations.Scroll>>()
+        val slotCache = HashMap<List<Any?>, SceneAnimation.Slot>()
+        val layers = ArrayList<Pair<Nitro.Batch, SceneAnimation.Slot>>()
+
         val batches = ArrayList<Nitro.Batch>()
         val terrain = ArrayList<Pair<IntArray, List<Nitro.Batch>>>() // block -> its terrain triangles, for ground heights
         for (by in by0..by1) for (bx in bx0..bx1) {
@@ -581,7 +595,18 @@ object FieldMap {
                     val own = ArrayList<Nitro.Batch>()
                     val sets = listOfNotNull(mapTex, c.texSet)
                     for (m in c.models) Nitro.buildMesh(m, Mat4.translate(cxw, cyw, czw), sets, light, own)
-                    batches.addAll(own)
+                    val scrolls = area?.let { a -> scrollCache.getOrPut(a.animation) { runCatching { FieldAnimations.readScrolls(src, a.animation) }.getOrDefault(emptyMap()) } }
+                    for (b in own) {
+                        val img = b.image
+                        val swap = b.textureName?.let { swaps[it] }?.takeIf { img != null && it.width == img.width && it.height == img.height }
+                        val scroll = b.materialName?.let { scrolls?.get(it) }
+                        if (img == null || (swap == null && scroll == null)) { batches.add(b); continue }
+                        val blend = b.alpha in 1..30 || img.translucent
+                        val slot = slotCache.getOrPut(listOf(img, swap, scroll, b.alpha, b.mode, blend)) {
+                            SceneAnimation.Slot(img, swap, scroll, if (b.alpha == 0) 1f else b.alpha / 31f, b.mode == 1, blend)
+                        }
+                        layers.add(b to slot)
+                    }
                     terrain.add(intArrayOf(bx, by) to own)
                 }
             }
@@ -631,6 +656,7 @@ object FieldMap {
         r.clear(0xFF000000.toInt())
         r.viewProj = viewProj
         r.draw(batches)
+        val animation = runCatching { SceneAnimation.capture(r, layers) }.getOrNull()
 
         // tiles the Pokémon can walk on and that are in sight, with room for it to be drawn
         val tiles = HashMap<Long, Tile>()
@@ -648,12 +674,31 @@ object FieldMap {
                 // something drawn in front of the ground here (a roof, a tree top): not in sight
                 val d = r.depth[pr[1].toInt().coerceIn(0, height - 1) * width + pr[0].toInt().coerceIn(0, width - 1)]
                 if (d > pr[2] * 1.004f) continue
-                tiles[Scene.key(gx, gy)] = Tile(gx, gy, wx, gh, wz)
+                val l = landAt(bx, by)!!
+                tiles[Scene.key(gx, gy)] = Tile(gx, gy, wx, gh, wz, l.behavior(x, y))
+            }
+        }
+        // the water in sight
+        val water = ArrayList<Float>()
+        for (by in by0..by1) for (bx in bx0..bx1) {
+            val l = landAt(bx, by) ?: continue
+            for (y in 0 until 32) for (x in 0 until 32) {
+                if (!isWater(l.behavior(x, y))) continue
+                val gx = bx * 32 + x
+                val gy = by * 32 + y
+                val gh = groundY(gx, gy) ?: (matrix.altitude(bx, by) * 8.0)
+                val pr = r.project(gx * TILE + TILE / 2, gh, gy * TILE + TILE / 2) ?: continue
+                if (pr[0] < 0f || pr[0] >= width || pr[1] < 0f || pr[1] >= height) continue
+                val d = r.depth[pr[1].toInt() * width + pr[0].toInt()]
+                if (d > pr[2] * 1.02f) continue
+                water.add(pr[0]); water.add(pr[1])
             }
         }
         val start = startTile(tiles, bestGx, bestGy)
         log("${tiles.size} tiles in sight to walk on, starting at ${start?.let { "${it.gx},${it.gy}" }}")
-        return Scene(course, width, height, r.color, r.depth, viewProj, tiles, TILE.toFloat(), start, lightKey(minute, lightType))
+        log("${animation?.size ?: 0} moving pixels, ${water.size / 2} water tiles in sight")
+        return Scene(course, width, height, r.color, r.depth, viewProj, tiles, TILE.toFloat(), start, lightKey(minute, lightType),
+            animation, water.toFloatArray(), followsTheDay(lightType))
     }
 
     /** Whether two neighbouring tiles are a step apart (not a cliff). */

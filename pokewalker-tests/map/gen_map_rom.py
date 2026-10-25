@@ -159,34 +159,46 @@ def material(tex_w=8, tex_h=8, both_sides=False, color=0x7FFF):
 
 def mdl0(name, display_list, tex_name, pal_name, scale, both_sides=False, color=0x7FFF):
     """One model, one node (identity), one material, one shape."""
-    sbc = bytes([0x06, 0, 0, 0, 0x04, 0, 0x05, 0, 0x01])
+    return mdl0_parts(name, [(display_list, tex_name, pal_name, 'mat0', both_sides, color)], scale)
+
+def mdl0_parts(name, parts, scale):
+    """One model, one node (identity), and per part (display list, texture, palette, material name,
+    both sides, colour) a material and a shape."""
+    n = len(parts)
+    sbc = bytes([0x06, 0, 0, 0])
+    for i in range(n): sbc += bytes([0x04, i, 0x05, i])
+    sbc += bytes([0x01])
     while len(sbc) % 4: sbc += b'\0'
     node = u16(0x0007) + s16(0)
-    nodes_dict_size = dict_size(1, 4)
-    nodes = dict_block([('node0', u32(nodes_dict_size))], 4) + node
-    # materials: pair dicts' offsets, material dict, tex pair dict, pal pair dict, index lists, material
-    mat_dict_size = dict_size(1, 4)
-    tex_pair_size = dict_size(1, 4) if tex_name else dict_size(0, 4)
-    pal_pair_size = dict_size(1, 4) if pal_name else dict_size(0, 4)
-    tex_pair_off = 4 + mat_dict_size
-    pal_pair_off = tex_pair_off + tex_pair_size
-    lists_off = pal_pair_off + pal_pair_size
-    mat_off = lists_off + 4
+    nodes = dict_block([('node0', u32(dict_size(1, 4)))], 4) + node
+    # materials: pair dicts' offsets, material dict, tex pair dict, pal pair dict, index lists, materials
+    texs = [(p[1], i) for i, p in enumerate(parts) if p[1]]
+    pals = [(p[2], i) for i, p in enumerate(parts) if p[2]]
+    tex_pair_off = 4 + dict_size(n, 4)
+    pal_pair_off = tex_pair_off + dict_size(len(texs), 4)
+    lists_off = pal_pair_off + dict_size(len(pals), 4)
+    lists = b''.join(u8(i) for i in range(n))
+    while len(lists) % 4: lists += b'\0'
+    mat_off = lists_off + len(lists)
     mats = u16(tex_pair_off) + u16(pal_pair_off)
-    mats += dict_block([('mat0', u32(mat_off))], 4)
-    mats += dict_block([(tex_name, u16(lists_off) + u8(1) + u8(0))], 4) if tex_name else dict_block([], 4)
-    mats += dict_block([(pal_name, u16(lists_off) + u8(1) + u8(0))], 4) if pal_name else dict_block([], 4)
-    mats += bytes([0, 0, 0, 0])
+    mats += dict_block([(p[3], u32(mat_off + 0x2C * i)) for i, p in enumerate(parts)], 4)
+    mats += dict_block([(t, u16(lists_off + i) + u8(1) + u8(0)) for t, i in texs], 4)
+    mats += dict_block([(t, u16(lists_off + i) + u8(1) + u8(0)) for t, i in pals], 4)
+    mats += lists
     assert len(mats) == mat_off
-    mats += material(both_sides=both_sides, color=color)
+    for p in parts: mats += material(both_sides=p[4], color=p[5])
     # shapes
-    shp_dict_size = dict_size(1, 4)
-    shp_off = shp_dict_size
-    shp = bytearray(0x10)
-    shp[2:4] = u16(0x10)
-    shp[8:0xC] = u32(0x10)
-    shp[0xC:0x10] = u32(len(display_list))
-    shapes = dict_block([('shp0', u32(shp_off))], 4) + bytes(shp) + display_list
+    shp_head = dict_size(n, 4)
+    offs, body_s = [], b''
+    for p in parts:
+        offs.append(shp_head + len(body_s))
+        shp = bytearray(0x10)
+        shp[2:4] = u16(0x10)
+        shp[8:0xC] = u32(0x10)
+        shp[0xC:0x10] = u32(len(p[0]))
+        body_s += bytes(shp) + p[0]
+        while len(body_s) % 4: body_s += b'\0'
+    shapes = dict_block([('shp%d' % i, u32(o)) for i, o in enumerate(offs)], 4) + body_s
     head = bytearray(0x40)
     body = nodes
     while (0x40 + len(body)) % 4: body += b'\0'
@@ -201,14 +213,13 @@ def mdl0(name, display_list, tex_name, pal_name, scale, both_sides=False, color=
     head[0xC:0x10] = u32(shp_block_off)
     head[0x10:0x14] = u32(0)  # no inverse bind matrices
     head[0x17] = 1
-    head[0x18] = 1
-    head[0x19] = 1
+    head[0x18] = n
+    head[0x19] = n
     head[0x1C:0x20] = s32(fx(scale))
     head[0x20:0x24] = s32(fx(1 / scale))
     model = bytes(head) + body
     mdict = dict_block([(name, u32(8 + dict_size(1, 4)))], 4)
-    block = b'MDL0' + u32(8 + len(mdict) + len(model)) + mdict + model
-    return block
+    return b'MDL0' + u32(8 + len(mdict) + len(model)) + mdict + model
 
 def box(x0, x1, y0, y1, z0, z1):
     return [
@@ -309,9 +320,44 @@ def rom(paths, code=b'IPGE'):
 
 SCALE = 64.0  # model position scale: fx16 vertices times 64 cover a whole block
 
-def ground_model(y=16.0):
+def ground_model(y=16.0, sea=False):
     h = 256.0
-    return nitro_file(b'BMD0', [mdl0('ground', quads([[(-h, y, -h), (-h, y, h), (h, y, h), (h, y, -h)]], SCALE), 'ground', 'ground_pl', SCALE)])
+    parts = [(quads([[(-h, y, -h), (-h, y, h), (h, y, h), (h, y, -h)]], SCALE), 'ground', 'ground_pl', 'ground', False, 0x7FFF)]
+    if sea:
+        # the water tiles x 20-24, y 12-15, with the game's animated sea texture and material
+        parts.append((quads([[(64, y + 0.5, -64), (64, y + 0.5, 0), (144, y + 0.5, 0), (144, y + 0.5, -64)]], SCALE),
+                      'sea_on', 'sea_pl', 'sea_on', False, 0x7FFF))
+    return nitro_file(b'BMD0', [mdl0_parts('ground', parts, SCALE)])
+
+def stripes(a, b, vertical):
+    return solid_tex([[(a if ((x if vertical else y) // 2) % 2 == 0 else b) for x in range(8)] for y in range(8)])
+
+def texture_swaps():
+    """a/1/3/9: the table (sea_on: frame 0 for 3 game frames, frame 1 for 3) and its frames."""
+    entry = b'sea_on'.ljust(16, b'\0') + bytes([0, 3, 1, 3]) + b'\xff' * 32
+    table = u32(1) + entry
+    blue = [rgb(32, 64, 200), rgb(240, 240, 255), rgb(24, 48, 160), rgb(64, 96, 220)]
+    frames = nitro_file(b'BTX0', [tex0([('sea_on.1', 8, 8, 2, stripes(0, 2, True), False),
+                                        ('sea_on.2', 8, 8, 2, stripes(1, 3, False), False)], [('sea_f_pl', blue + [0] * 12)])])
+    return narc([table, frames])
+
+def texture_scrolls():
+    """a/1/4/0 member 0: a BTA0 moving material sea_on's texture by an eighth a frame across S."""
+    frames = 8
+    mat_entry_size = 40
+    mdict_size = dict_size(1, mat_entry_size)
+    track_off = 8 + mdict_size
+    values = b''.join(s16(fx(k / 8)) for k in range(frames))
+    entry = (u32(0x30000000 | frames) + u32(0x1000) + u32(0x30000000 | frames) + u32(0x1000) +
+             u32(0x20000000 | frames) + u32(0x10000000) + u32(0x10000000 | frames) + u32(track_off) +
+             u32(0x30000000 | frames) + u32(0))
+    anim = b'M\0AT' + u16(frames) + u8(0) + u8(0) + dict_block([('sea_on', entry)], mat_entry_size) + values
+    while len(anim) % 4: anim += b'\0'
+    adict = dict_block([('area00_ani', u32(0))], 4)
+    anim_off = 8 + len(adict)
+    adict = dict_block([('area00_ani', u32(anim_off))], 4)
+    block = b'SRT0' + u32(8 + len(adict) + len(anim)) + adict + anim
+    return narc([nitro_file(b'BTA0', [block])])
 
 def perms_block0():
     perms = [(0, 0)] * 1024
@@ -373,20 +419,24 @@ def build():
     cave = matrix(1, 1, None, None, [2], name=b'm_dun2501_')
     files['a/0/4/1'] = narc([world] + [empty] * 41 + [cave])
     # land data
-    b0 = land(perms_block0(), [(1, 0.0, 16.0, 64.0), (2, -96.0, 16.0, -48.0), (3, 0.0, 0.0, 0.0)], ground_model(),
+    b0 = land(perms_block0(), [(1, 0.0, 16.0, 64.0), (2, -96.0, 16.0, -48.0), (3, 0.0, 0.0, 0.0)], ground_model(sea=True),
               bdhc([flat(16), (SLOPE_X, -256, 256, 256, SN, SD)]), bgs=b'\x01\x00\x00\x80\x08\x14\x0c\x18')
     b1 = land([(0, 0) if 15 <= i % 32 <= 17 else (0, 0x80) for i in range(1024)], [], ground_model(), bdhc([flat(16)]))
     b2 = land(perms_cave(), [], ground_model(0.0), bdhc([flat(0)]))
     files['a/0/6/5'] = narc([b0, b1, b2])
     # area data: building set, map textures, animations, outside, light type
-    day = u16(0) + u16(0) + u16(0xFFFF) + u8(1) + u8(1)
+    day = u16(0) + u16(0) + u16(0) + u8(1) + u8(1)  # scrolling animation 0
     steady = u16(0) + u16(0) + u16(0xFFFF) + u8(1) + u8(0)
     files['a/0/4/2'] = narc([day] * 87 + [steady] + [day] * 2)
     files['a/0/4/3'] = narc([u16(2) + u16(1) + u16(3)])
     # textures
     green = [rgb(64, 168, 72), rgb(56, 152, 64), rgb(80, 184, 88), rgb(48, 136, 56)]
     ground_tex = solid_tex([[(x + y) % 2 for x in range(8)] for y in range(8)])
-    files['a/0/4/4'] = narc([nitro_file(b'BTX0', [tex0([('ground', 8, 8, 2, ground_tex, False)], [('ground_pl', green + [0] * 12)])])])
+    sea = [rgb(40, 80, 210), rgb(200, 220, 255), rgb(30, 60, 170), rgb(70, 110, 230)]
+    files['a/0/4/4'] = narc([nitro_file(b'BTX0', [tex0([('ground', 8, 8, 2, ground_tex, False), ('sea_on', 8, 8, 2, stripes(0, 1, True), False)],
+                                                       [('ground_pl', green + [0] * 12), ('sea_pl', sea + [0] * 12)])])])
+    files['a/1/3/9'] = texture_swaps()
+    files['a/1/4/0'] = texture_scrolls()
     red = [rgb(200, 48, 40), rgb(176, 40, 32), rgb(216, 64, 56), rgb(160, 32, 24)]
     wall_tex = solid_tex([[0] * 8 for _ in range(8)])
     files['a/0/7/0'] = narc([nitro_file(b'BTX0', [tex0([('wall', 8, 8, 2, wall_tex, False)], [('wall_pl', red + [0] * 12)])])])

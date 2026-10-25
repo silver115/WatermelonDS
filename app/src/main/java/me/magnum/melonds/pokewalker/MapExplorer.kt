@@ -15,7 +15,9 @@ import kotlin.random.Random
 class MapWanderer(val scene: FieldMap.Scene, private val random: Random = Random.Default) {
 
     /** Where to draw it: a world position on the ground, which way it faces, its frame and how high it hops. */
-    class Pose(val x: Double, val y: Double, val z: Double, val facing: Int, val frame: Int, val hop: Double, val moving: Boolean)
+    class Pose(val x: Double, val y: Double, val z: Double, val facing: Int, val frame: Int, val hop: Double, val moving: Boolean,
+               /** Standing in tall grass (its feet are hidden in it). */
+               val grass: Boolean = false)
 
     companion object {
         /** One tile's walk (the game's is 16 frames, about 270 ms; a stroll is a little slower). */
@@ -97,17 +99,19 @@ class MapWanderer(val scene: FieldMap.Scene, private val random: Random = Random
         var y = at.y
         var z = at.z
         val n = next
+        var grass = at.tallGrass
         if (n != null) {
             val t = ((now - stepStart).toDouble() / STEP_MS).coerceIn(0.0, 1.0)
             x += (n.x - at.x) * t
             y += (n.y - at.y) * t
             z += (n.z - at.z) * t
+            if (t > 0.5) grass = n.tallGrass
         }
         // walking: a step every 160 ms; standing: the slow step in place the game's followers do
         val frame = if (n != null) ((now / 160) % 2).toInt() else ((now / 480) % 2).toInt()
         val u = (now - hopStart).toDouble() / HOP_MS
         val hop = if (hopStart != Long.MIN_VALUE && u >= 0.0 && u <= 1.0) sin(PI * u) * HOP_HEIGHT else 0.0
-        return Pose(x, y, z, facing, frame, hop, n != null)
+        return Pose(x, y, z, facing, frame, hop, n != null, grass)
     }
 
     /** Puts it standing on [tile]. */
@@ -340,8 +344,10 @@ class MapSpritePainter(val scene: FieldMap.Scene, val sprite: FollowerSprites.Sp
         val h = scene.height
         fun visible(px: Int, py: Int) = px in 0 until w && py in 0 until h && scene.depth[py * w + px] <= depth * 1.0008f
 
+        // in tall grass its feet (and shadow) are hidden, as in the game, unless it hops out
+        val grassLine = if (pose.grass && pose.hop < 3.0) ay - 5 else Int.MAX_VALUE
         // the shadow on the ground
-        for (dy in -ry.toInt()..ry.toInt()) for (dx in -rx.toInt()..rx.toInt()) {
+        if (grassLine == Int.MAX_VALUE) for (dy in -ry.toInt()..ry.toInt()) for (dx in -rx.toInt()..rx.toInt()) {
             if ((dx / rx) * (dx / rx) + (dy / ry) * (dy / ry) > 1f) continue
             val px = ax + dx
             val py = ay + dy
@@ -361,7 +367,7 @@ class MapSpritePainter(val scene: FieldMap.Scene, val sprite: FollowerSprites.Sp
             if (c ushr 24 == 0) continue
             val px = spriteLeft + x
             val py = spriteTop + y
-            if (!visible(px, py)) continue
+            if (py > grassLine || !visible(px, py)) continue
             val bx = px - left
             val by = py - top
             if (bx in 0 until bufferWidth && by in 0 until bufferHeight) {

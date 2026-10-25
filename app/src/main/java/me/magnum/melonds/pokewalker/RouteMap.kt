@@ -4,7 +4,9 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.RadialGradient
 import android.graphics.RectF
+import android.graphics.Shader
 import android.net.Uri
 import android.os.SystemClock
 import android.util.Log
@@ -13,14 +15,19 @@ import kotlinx.coroutines.withContext
 import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.util.Calendar
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.roundToInt
 
 /**
  * The real place of the walk, from the player's own HeartGold/SoulSilver ROM ([FieldMap]), with
- * the walking Pokémon exploring it ([MapWanderer], [MapSpritePainter]). It is drawn in the DS's
- * own pixels, made [scale] times bigger to fill the screen.
+ * the walking Pokémon exploring it ([MapWanderer], [MapSpritePainter]). The game's own moving
+ * textures play on it (the sea, waves on the shore, rivers, flowers: [SceneAnimation]) and little
+ * things move over it ([MapAmbience]). It is drawn in the DS's own pixels, made [scale] times
+ * bigger to fill the screen.
  */
 class RouteMap internal constructor(
     val scene: FieldMap.Scene,
@@ -46,6 +53,19 @@ class RouteMap internal constructor(
     private var offsetX = 0f
     private var offsetY = 0f
     private var covered: List<RectF> = emptyList()
+    private val ambience = MapAmbience(scene)
+    private val dots = ArrayList<MapAmbience.Dot>()
+    private val clouds = ArrayList<MapAmbience.Cloud>()
+    private val dotPaint = Paint()
+    private val cloudPaint = Paint().apply { isFilterBitmap = true }
+    private val cloudRect = RectF()
+    private var lastTick = Long.MIN_VALUE
+    private val animFrame = IntArray(scene.width * scene.height)
+    private val animBusy = AtomicBoolean(false)
+    @Volatile private var animReady = false
+    private var minute = 0
+    private var minuteAt = Long.MIN_VALUE
+    private var lastTile: FieldMap.Tile? = null
 
     /** Whether the Pokémon is drawn walking around. */
     val hasPokemon get() = painter != null
@@ -62,18 +82,80 @@ class RouteMap internal constructor(
         canvas.save()
         canvas.translate(offsetX, offsetY)
         canvas.scale(scale.toFloat(), scale.toFloat())
+        // the game's moving textures, at 10 steps a second of its 30, coloured in the background
+        val anim = scene.animation
+        val tick = now * 30 / 1000 / 3 * 3
+        if (anim != null && tick != lastTick && animBusy.compareAndSet(false, true)) {
+            lastTick = tick
+            animator.execute {
+                try {
+                    if (anim.update(tick)) {
+                        synchronized(animFrame) { System.arraycopy(scene.image, 0, animFrame, 0, animFrame.size) }
+                        animReady = true
+                    }
+                } catch (e: Exception) {
+                    Log.w("RouteMap", "Texture animation stopped", e)
+                } finally {
+                    animBusy.set(false)
+                }
+            }
+        }
+        if (animReady) {
+            animReady = false
+            synchronized(animFrame) { picture.setPixels(animFrame, 0, scene.width, 0, 0, scene.width, scene.height) }
+        }
         canvas.drawBitmap(picture, 0f, 0f, paint)
         val wd = wanderer
         val p = painter
         val b = spriteBitmap
         if (wd != null && p != null && b != null) {
             wd.update(now)
-            if (p.paint(wd.pose(now))) {
+            val pose = wd.pose(now)
+            if (p.paint(pose)) {
                 b.setPixels(p.buffer, 0, p.bufferWidth, 0, 0, p.bufferWidth, p.bufferHeight)
                 canvas.drawBitmap(b, p.left.toFloat(), p.top.toFloat(), paint)
             }
+            // stepping into tall grass shakes it
+            val at = wd.at
+            if (at !== lastTile) {
+                if (lastTile != null && at.tallGrass) scene.project(at.x, at.y, at.z)?.let { ambience.rustle(it[0], it[1], now) }
+                lastTile = at
+            }
+        }
+        if (minuteAt == Long.MIN_VALUE || now - minuteAt > 10_000) {
+            minuteAt = now
+            minute = Calendar.getInstance().let { it.get(Calendar.HOUR_OF_DAY) * 60 + it.get(Calendar.MINUTE) }
+        }
+        ambience.frame(now, minute, dots, clouds)
+        for (c in clouds) {
+            cloudRect.set(c.x - c.rx, c.y - c.ry, c.x + c.rx, c.y + c.ry)
+            cloudPaint.alpha = (c.alpha * 255).toInt().coerceIn(0, 255)
+            canvas.drawBitmap(cloudShadow, null, cloudRect, cloudPaint)
+        }
+        for (d in dots) {
+            dotPaint.color = d.color
+            val x = d.x.roundToInt().toFloat()
+            val y = d.y.roundToInt().toFloat()
+            canvas.drawRect(x, y, x + d.size, y + d.size, dotPaint)
         }
         canvas.restore()
+    }
+
+    private companion object {
+        /** Recolours the moving textures off the main thread. */
+        val animator: ExecutorService by lazy {
+            Executors.newSingleThreadExecutor { r -> Thread(r, "RouteMapAnimation").apply { isDaemon = true; priority = Thread.NORM_PRIORITY - 1 } }
+        }
+
+        /** A soft round shadow, stretched over each passing cloud. */
+        val cloudShadow: Bitmap by lazy {
+            val bmp = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
+            val p = Paint(Paint.ANTI_ALIAS_FLAG)
+            p.shader = RadialGradient(32f, 32f, 32f, intArrayOf(0xFF000000.toInt(), 0xB0000000.toInt(), 0x00000000),
+                floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
+            Canvas(bmp).drawCircle(32f, 32f, 32f, p)
+            bmp
+        }
     }
 
     /**

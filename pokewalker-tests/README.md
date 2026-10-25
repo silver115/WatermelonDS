@@ -85,16 +85,19 @@ matrices, land data with tile permissions, a background-sound section, buildings
 a terrain model and BDHC surfaces (one of them a slope), area data with the day
 and the steady cave light, a building list, texture sets, building models (one the
 area doesn't load, one a floating effect layer) and follower sprites with a shiny
-palette. `MapTest.kt` checks which spot is picked, the colours drawn, which tiles
-the Pokémon may stand on and how high, that a cave counts only its own floor, the
-sprite and the walking Pokémon read from the walker's memory, hiding behind the
-house, and three minutes of wandering, being sent somewhere and walked by hand:
+palette, plus a sea patch with the game's texture swaps (`a/1/3/9`) and scroll
+(`a/1/4/0`). `MapTest.kt` checks which spot is picked, the colours drawn, which
+tiles the Pokémon may stand on and how high, that a cave counts only its own
+floor, the moving sea, the drifting ambience (clouds and petals by day, fireflies
+at night, grass shaken up), the sprite and the walking Pokémon read from the
+walker's memory, hiding behind the house and in tall grass, and three minutes of
+wandering, being sent somewhere and walked by hand:
 
 ```sh
 python3 pokewalker-tests/map/gen_map_rom.py /tmp/map.nds /tmp/map_empty.nds
 P=app/src/main/java/me/magnum/melonds/pokewalker
 kotlinc -d /tmp/map.jar $P/NitroFiles.kt $P/SoftRenderer.kt $P/CryArchive.kt $P/FieldMap.kt \
-    $P/FollowerSprites.kt $P/MapExplorer.kt pokewalker-tests/map/MapTest.kt
+    $P/FollowerSprites.kt $P/MapExplorer.kt $P/MapAnimation.kt $P/MapAmbience.kt pokewalker-tests/map/MapTest.kt
 java -cp /tmp/map.jar:$KOTLIN_HOME/lib/kotlin-stdlib.jar MapTestKt /tmp/map.nds /tmp/map_empty.nds
 ```
 
