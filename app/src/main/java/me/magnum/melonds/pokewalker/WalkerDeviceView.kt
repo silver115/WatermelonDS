@@ -80,6 +80,10 @@ class WalkerDeviceView(
 
     override fun celebrate() = confetti.start()
 
+    override fun coveredAreas(out: MutableList<RectF>) {
+        if (!body.isEmpty) out.add(RectF(body))
+    }
+
     /** New picture from the walker (shades 0-3) and the walker's shade setting. */
     override fun setFrame(frame: ByteArray, newShade: Int) {
         if (newShade != shade) {

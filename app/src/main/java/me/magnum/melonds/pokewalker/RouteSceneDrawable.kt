@@ -65,9 +65,10 @@ class AndroidSceneCanvas : SceneCanvas {
 }
 
 /**
- * The walk's surroundings behind the whole walker screen: the route's landscape under a live
- * sky, gently dimmed so the cards and buttons on top stay easy to read, and optionally the
- * walking Pokémon strolling along the ground. Call [invalidateSelf] now and then to animate.
+ * The walk's surroundings behind the whole walker screen: the real place in the game the course
+ * looks like with the walking Pokémon exploring it ([map]), or else a painted landscape under a
+ * live sky; gently dimmed so the cards and buttons on top stay easy to read (not while
+ * [explore]ing). Call [invalidateSelf] now and then to animate.
  */
 class RouteSceneDrawable(private val density: Float) : Drawable() {
     val scene = RouteScene()
@@ -92,6 +93,27 @@ class RouteSceneDrawable(private val density: Float) : Drawable() {
     var railSide = false
         set(value) { field = value; invalidateSelf() }
 
+    /** The real place from the game with the Pokémon exploring it, in place of the painted landscape. */
+    var map: RouteMap? = null
+        set(value) {
+            if (field === value) return
+            field = value
+            value?.setCovered(covered)
+            invalidateSelf()
+        }
+
+    /** Just the place, not dimmed for cards on top (they're put away). */
+    var explore = false
+        set(value) { field = value; invalidateSelf() }
+
+    private var covered: List<RectF> = emptyList()
+
+    /** The parts of the screen the cards cover, so the Pokémon keeps to where it can be seen. */
+    fun setCovered(rects: List<RectF>) {
+        covered = rects
+        map?.setCovered(rects)
+    }
+
     override fun draw(canvas: Canvas) {
         val b = bounds
         if (b.isEmpty) return
@@ -103,24 +125,29 @@ class RouteSceneDrawable(private val density: Float) : Drawable() {
         canvas.save()
         canvas.translate(b.left.toFloat(), b.top.toFloat())
         canvas.clipRect(0f, 0f, w, h)
-        sceneCanvas.canvas = canvas
-        scene.paint(sceneCanvas, w, h, minute, ms)
-        sceneCanvas.canvas = null
+        val place = map
+        if (place != null) {
+            place.draw(canvas, w, h, ms)
+        } else {
+            sceneCanvas.canvas = canvas
+            scene.paint(sceneCanvas, w, h, minute, ms)
+            sceneCanvas.canvas = null
+        }
 
         // dim it a little, and more under the bars where text and icons sit
-        canvas.drawColor(0x2E000000)
+        if (!explore) canvas.drawColor(if (place != null) 0x40000000 else 0x2E000000)
         val top = 96f * density
-        scrim.shader = LinearGradient(0f, 0f, 0f, top, 0x8C000000.toInt(), 0x00000000, Shader.TileMode.CLAMP)
+        scrim.shader = LinearGradient(0f, 0f, 0f, top, if (explore) 0x59000000 else 0x8C000000.toInt(), 0x00000000, Shader.TileMode.CLAMP)
         canvas.drawRect(0f, 0f, w, top, scrim)
         if (railSide) {
             val side = 88f * density
-            scrim.shader = LinearGradient(0f, 0f, side, 0f, 0x73000000, 0x00000000, Shader.TileMode.CLAMP)
+            scrim.shader = LinearGradient(0f, 0f, side, 0f, if (explore) 0x4D000000 else 0x73000000, 0x00000000, Shader.TileMode.CLAMP)
             canvas.drawRect(0f, 0f, side, h, scrim)
         }
         scrim.shader = null
 
         val frames = walker
-        if (showWalker && frames != null && frames.isNotEmpty()) {
+        if ((place == null || !place.hasPokemon) && showWalker && frames != null && frames.isNotEmpty()) {
             // strolling left to right along the ground, two steps a second
             val scale = (2.5f * density).coerceAtLeast(2f)
             val sw = frames[0].width * scale

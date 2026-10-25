@@ -675,6 +675,11 @@
     <string name="pokewalker_device_switch_look">Switch look</string>
     <string name="pokewalker_device_look_modern">Modern look</string>
     <string name="pokewalker_device_look_classic">Classic look</string>
+    <string name="pokewalker_explore">Explore the route</string>
+    <string name="pokewalker_explore_close">Back to the walker</string>
+    <string name="pokewalker_explore_caption">%1$s · %2$s in %3$s</string>
+    <string name="pokewalker_explore_hint">Tap somewhere and %1$s walks over. Tap %1$s to say hi.</string>
+    <string name="pokewalker_explore_hint_no_sprite">%1$s is out exploring.</string>
     <string name="pokewalker_modern_today">Today</string>
     <string name="pokewalker_modern_of_goal">of %1$s</string>
     <string name="pokewalker_modern_watts">Watts</string>

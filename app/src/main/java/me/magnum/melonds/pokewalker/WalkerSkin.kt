@@ -20,6 +20,9 @@ interface WalkerSkin {
 
     /** The day's step goal was just reached: celebrate. */
     fun celebrate() {}
+
+    /** Adds the parts of [view] this look covers (its cards or the device), in the view's own coordinates. */
+    fun coveredAreas(out: MutableList<android.graphics.RectF>) {}
 }
 
 /**

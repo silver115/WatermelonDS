@@ -4,13 +4,16 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.res.ColorStateList
 import android.content.res.Configuration
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.os.SystemClock
 import android.util.TypedValue
 import android.view.Choreographer
 import android.view.Gravity
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -18,6 +21,7 @@ import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.TooltipCompat
 import androidx.core.view.ViewCompat
@@ -39,6 +43,10 @@ import me.magnum.melonds.ui.settings.SettingsActivity
  * a classic look: the walker's picture, three buttons, Poké Radar, dowsing, trainer card,
  * Pokémon & items, settings. It is the same walker the emulated HeartGold/SoulSilver talks
  * to, so everything done here is there in the game, and the other way round.
+ *
+ * Behind it is the place in the game the walk's course looks like, read from the player's own
+ * ROM, with the walking Pokémon exploring it; "explore" puts the walker away to watch it, send
+ * it places with a tap or walk it about with the D-pad.
  */
 class PokewalkerDeviceActivity : AppCompatActivity() {
 
@@ -48,6 +56,8 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
     }
 
     private lateinit var content: FrameLayout
+    private var rootLayout: View? = null
+    private var bannerHolder: View? = null
     private var banner: LinearLayout? = null
     private var bannerText: TextView? = null
     private var bannerClose: ImageButton? = null
@@ -66,6 +76,13 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
     private var running = false
     private var pendingApp = -1
     private var statusJob: Job? = null
+    private var walkingPokemon: WalkingPokemon? = null
+    private var exploring = false
+    private var exploreButton: ImageButton? = null
+    private var exploreCaption: TextView? = null
+    private val leaveExplore = object : OnBackPressedCallback(false) {
+        override fun handleOnBackPressed() = setExploring(false)
+    }
 
     private val frameCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
@@ -92,6 +109,7 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
         window.navigationBarColor = android.graphics.Color.TRANSPARENT
         buildChrome()
         applySkin(Pokewalker.skin(this))
+        onBackPressedDispatcher.addCallback(this, leaveExplore)
         pendingApp = intent?.getIntExtra(EXTRA_OPEN_APP, -1) ?: -1
     }
 
@@ -171,8 +189,27 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
         // a note about the game above the walker when there is one, the walker below it
         val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         column.addView(buildBanner(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        // the walker, and over it while exploring, what the place is
+        val stage = FrameLayout(this)
         content = FrameLayout(this)
-        column.addView(content, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        stage.addView(content, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        val caption = TextView(this).apply {
+            setTextColor(WalkerTheme.TEXT)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setLineSpacing(0f, 1.15f)
+            gravity = Gravity.CENTER
+            setPadding(dp(16), dp(10), dp(16), dp(10))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(18).toFloat()
+                setColor((WalkerTheme.CARD and 0x00FFFFFF) or 0xD9000000.toInt())
+            }
+            visibility = View.GONE
+        }
+        stage.addView(caption, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { setMargins(dp(16), 0, dp(16), dp(16)) })
+        exploreCaption = caption
+        stage.setOnTouchListener { v, e -> exploreTouch(v, e) }
+        column.addView(stage, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         root.addView(
             column,
             if (rail) LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
@@ -181,7 +218,9 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
         if (skinView != null) {
             content.addView(skinView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         }
+        rootLayout = root
         setContentView(root)
+        if (exploring) showExploring()
         ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
             v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
@@ -226,6 +265,7 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
         card.addView(close, LinearLayout.LayoutParams(dp(40), dp(40)))
         val holder = FrameLayout(this).apply { setPadding(dp(10), dp(8), dp(10), 0) }
         holder.addView(card, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        bannerHolder = holder
         banner = card
         bannerText = text
         bannerClose = close
@@ -256,6 +296,8 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
         }
         rail.addView(barButton(R.drawable.ic_pw_back, R.string.pokewalker_device_back) { backToMelonDS() })
         rail.addView(View(this), LinearLayout.LayoutParams(1, 0, 1f))
+        rail.addView(buildExploreButton())
+        rail.addView(View(this), LinearLayout.LayoutParams(1, dp(8)))
         rail.addView(barButton(R.drawable.ic_pw_skin, R.string.pokewalker_device_switch_look) { switchSkin() })
         rail.addView(View(this), LinearLayout.LayoutParams(1, dp(8)))
         rail.addView(barButton(R.drawable.ic_settings, R.string.pokewalker_device_settings) { openSettings() })
@@ -277,9 +319,19 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
             setPadding(dp(8), 0, 0, 0)
         }
         bar.addView(title, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        bar.addView(buildExploreButton())
         bar.addView(barButton(R.drawable.ic_pw_skin, R.string.pokewalker_device_switch_look) { switchSkin() })
         bar.addView(barButton(R.drawable.ic_settings, R.string.pokewalker_device_settings) { openSettings() })
         return bar
+    }
+
+    /** Explore the place the walk is in (only there when the place could be read from the game). */
+    private fun buildExploreButton(): ImageButton = barButton(R.drawable.ic_pw_explore, R.string.pokewalker_explore) {
+        setExploring(!exploring)
+    }.also {
+        it.visibility = if (scene.map != null) View.VISIBLE else View.GONE
+        exploreButton = it
+        updateExploreButton()
     }
 
     private fun barButton(icon: Int, description: Int, onClick: () -> Unit): ImageButton = ImageButton(this).apply {
@@ -327,6 +379,7 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
         }
         skin = next
         scene.showWalker = name == Pokewalker.SKIN_CLASSIC
+        next.view.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> updateCovered() }
         content.addView(next.view, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         if (haveFrame) next.setFrame(frame, frameShade)
         next.setStatus(lastStatus, Pokewalker.stepGoal(this))
@@ -354,9 +407,10 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
     }
 
     private fun tick() {
-        // the landscape's clouds, waves and weather move along at about 15 frames a second
-        val now = android.os.SystemClock.uptimeMillis()
-        if (now - sceneDrawnAt >= 66) {
+        // the landscape's clouds, waves and weather move along at about 15 frames a second,
+        // the exploring Pokémon at 30
+        val now = SystemClock.uptimeMillis()
+        if (now - sceneDrawnAt >= (if (scene.map != null) 33 else 66)) {
             sceneDrawnAt = now
             scene.invalidateSelf()
         }
@@ -424,15 +478,140 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
         }
     }
 
-    /** Where the walk is: the route's landscape, and the walking Pokémon's sprite for it. */
+    /**
+     * Where the walk is: the place in the game when the ROM can be read (with the walking
+     * Pokémon's own overworld sprite exploring it), else the route's painted landscape, and the
+     * walking Pokémon's small sprite for it.
+     */
     private suspend fun updateScene(status: WalkerStatus?) {
         val walking = status != null && status.registered && status.hasPokemon
         if (walking) scene.scene.setRoute(status!!.routeImage, status.route) else scene.scene.setRoute(0, "")
         val key = if (walking) "${status!!.species}:${status.strollStartUnix}:${status.route}" else ""
-        if (key == walkerKey) return
-        walkerKey = key
-        scene.walker = if (!walking) null else withContext(Dispatchers.Default) {
-            PokewalkerNative.exportImage()?.let { RouteSceneDrawable.walkerSprite(it, LcdPalette.MODERN) }
+        if (key != walkerKey) {
+            walkerKey = key
+            val image = if (!walking) null else withContext(Dispatchers.Default) { PokewalkerNative.exportImage() }
+            scene.walker = image?.let { RouteSceneDrawable.walkerSprite(it, LcdPalette.MODERN) }
+            walkingPokemon = WalkingPokemon.fromImage(image)
+        }
+        val b = scene.bounds
+        scene.map = if (!walking) null else RouteMaps.get(this, status!!.route, status.routeImage, walkingPokemon, b.width(), b.height())
+        exploreButton?.visibility = if (scene.map != null) View.VISIBLE else View.GONE
+        if (exploring && scene.map == null) setExploring(false)
+        if (exploring) updateCaption()
+    }
+
+    // ---- exploring the place ----------------------------------------------------------------------
+
+    private fun setExploring(on: Boolean) {
+        if (on && scene.map == null) return
+        if (on == exploring) return
+        exploring = on
+        if (on) showExploring() else {
+            content.visibility = View.VISIBLE
+            bannerHolder?.visibility = View.VISIBLE
+            exploreCaption?.visibility = View.GONE
+            scene.explore = false
+            scene.map?.release()
+            updateBanner(lastStatus)
+        }
+        leaveExplore.isEnabled = on
+        updateExploreButton()
+        updateCovered()
+    }
+
+    /** The walker put away: just the place, the Pokémon and what the place is. */
+    private fun showExploring() {
+        content.visibility = View.INVISIBLE
+        bannerHolder?.visibility = View.GONE
+        scene.explore = true
+        updateCaption()
+        exploreCaption?.visibility = View.VISIBLE
+    }
+
+    private fun updateExploreButton() {
+        val b = exploreButton ?: return
+        val description = getString(if (exploring) R.string.pokewalker_explore_close else R.string.pokewalker_explore)
+        b.contentDescription = description
+        TooltipCompat.setTooltipText(b, description)
+        b.imageTintList = ColorStateList.valueOf(if (exploring) WalkerTheme.GOLD else WalkerTheme.TEXT)
+    }
+
+    private fun updateCaption() {
+        val map = scene.map ?: return
+        val status = lastStatus ?: return
+        val name = status.pokemonName.ifBlank { status.speciesName }
+        val text = getString(R.string.pokewalker_explore_caption, map.scene.course.name, map.scene.course.place, map.game) + "\n" +
+            getString(if (map.hasPokemon) R.string.pokewalker_explore_hint else R.string.pokewalker_explore_hint_no_sprite, name)
+        if (exploreCaption?.text?.toString() != text) exploreCaption?.text = text
+    }
+
+    /** Taps while exploring: on the Pokémon it hops and cries, elsewhere it walks over. */
+    private fun exploreTouch(v: View, e: MotionEvent): Boolean {
+        if (!exploring) return false
+        if (e.actionMasked == MotionEvent.ACTION_UP) {
+            val map = scene.map ?: return true
+            val root = rootLayout ?: return true
+            val at = IntArray(2)
+            val rootAt = IntArray(2)
+            v.getLocationInWindow(at)
+            root.getLocationInWindow(rootAt)
+            if (map.tap(e.x + at[0] - rootAt[0], e.y + at[1] - rootAt[1], SystemClock.uptimeMillis())) cry(map)
+            scene.invalidateSelf()
+        }
+        return true
+    }
+
+    private fun cry(map: RouteMap) {
+        if (map.species > 0) PokemonCries.play(this, map.species, lastVolume) {}
+    }
+
+    /** The cards on top cover the place: the Pokémon keeps to where it can be seen. */
+    private fun updateCovered() {
+        val s = skin
+        val root = rootLayout
+        if (s == null || root == null || exploring) {
+            scene.setCovered(emptyList())
+            return
+        }
+        val list = ArrayList<RectF>()
+        s.coveredAreas(list)
+        val at = IntArray(2)
+        val rootAt = IntArray(2)
+        s.view.getLocationInWindow(at)
+        root.getLocationInWindow(rootAt)
+        for (r in list) r.offset((at[0] - rootAt[0]).toFloat(), (at[1] - rootAt[1]).toFloat())
+        scene.setCovered(list)
+    }
+
+    /** D-pad walks the Pokémon about while exploring; A says hi. */
+    private fun exploreKey(keyCode: Int, event: KeyEvent, down: Boolean): Boolean {
+        val map = scene.map ?: return false
+        val direction = when (keyCode) {
+            KeyEvent.KEYCODE_DPAD_UP -> FollowerSprites.UP
+            KeyEvent.KEYCODE_DPAD_DOWN -> FollowerSprites.DOWN
+            KeyEvent.KEYCODE_DPAD_LEFT -> FollowerSprites.LEFT
+            KeyEvent.KEYCODE_DPAD_RIGHT -> FollowerSprites.RIGHT
+            else -> -1
+        }
+        val now = SystemClock.uptimeMillis()
+        if (direction >= 0) {
+            if (down && event.repeatCount == 0) map.walk(direction, true, now)
+            if (!down) map.release()
+            return true
+        }
+        return when (keyCode) {
+            KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_SPACE -> {
+                if (down && event.repeatCount == 0) {
+                    map.hop(now)
+                    cry(map)
+                }
+                true
+            }
+            KeyEvent.KEYCODE_BUTTON_B -> {
+                if (!down) setExploring(false)
+                true
+            }
+            else -> false
         }
     }
 
@@ -471,6 +650,8 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        // while exploring the walker is put away: its buttons do nothing
+        if (exploring) return exploreKey(keyCode, event, true) || buttonForKey(keyCode) >= 0 || super.onKeyDown(keyCode, event)
         val button = buttonForKey(keyCode)
         if (button < 0) return super.onKeyDown(keyCode, event)
         if (event.repeatCount == 0) {
@@ -481,6 +662,7 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        if (exploring) return exploreKey(keyCode, event, false) || buttonForKey(keyCode) >= 0 || super.onKeyUp(keyCode, event)
         val button = buttonForKey(keyCode)
         if (button < 0) return super.onKeyUp(keyCode, event)
         skin?.showPressed(button, false)

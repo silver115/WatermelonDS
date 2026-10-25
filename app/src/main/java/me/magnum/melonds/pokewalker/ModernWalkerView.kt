@@ -166,6 +166,10 @@ class ModernWalkerView(
 
     override fun celebrate() = confetti.start()
 
+    override fun coveredAreas(out: MutableList<RectF>) {
+        for (r in arrayOf(lcdCard, ringCard, wattsCard, weekCard, *chips)) if (!r.isEmpty) out.add(RectF(r))
+    }
+
     private fun redrawLcd() {
         for (i in lcdPixels.indices) lcdPixels[i] = palette[shades[i].toInt() and 3]
         lcd.setPixels(lcdPixels, 0, WalkerDeviceView.LCD_WIDTH, 0, 0, WalkerDeviceView.LCD_WIDTH, WalkerDeviceView.LCD_HEIGHT)
