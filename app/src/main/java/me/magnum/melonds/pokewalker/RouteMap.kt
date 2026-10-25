@@ -6,6 +6,7 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
 import android.net.Uri
+import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -135,8 +136,10 @@ object RouteMaps {
     private const val TAG = "RouteMaps"
 
     private var cached: RouteMap? = null
-    private var failedRom: String? = null
-    private var failedKey: String? = null
+    @Volatile private var failedRom: String? = null
+    @Volatile private var failedKey: String? = null
+    /** Until when not to try [failedKey] again (elapsed realtime; Long.MAX_VALUE: not this session). */
+    @Volatile private var failedUntil = 0L
 
     /** Picture size and scale for a [w] x [h] view: about 22 tiles across when wide (13 when tall), scaled by whole pixels. */
     fun pictureSize(w: Int, h: Int): IntArray {
@@ -174,7 +177,7 @@ object RouteMaps {
         val c = cached
         val sameScene = c != null && c.key == key && lightOk(c)
         if (sameScene && c!!.pokemon == pokemon) return c
-        if (!sameScene && key == failedKey) return null
+        if (!sameScene && key == failedKey && SystemClock.elapsedRealtime() < failedUntil) return null
         val app = context.applicationContext
         val made = withContext(Dispatchers.IO) { make(app, uri, key, routeName, routeImage, pokemon, w, h, if (sameScene) c else null, c) }
         if (made != null) cached = made
@@ -218,23 +221,31 @@ object RouteMaps {
                 }
             }
         } catch (e: FieldMap.MapException) {
-            if (e.wholeRom) failedRom = uri else failedKey = key
+            if (e.wholeRom) failedRom = uri else fail(key, Long.MAX_VALUE)
             Log.w(TAG, "No route map: ${e.message}")
             PokewalkerNative.note("Route map not available: ${e.message}")
             null
         } catch (e: Nitro.FormatException) {
-            failedKey = key
+            fail(key, Long.MAX_VALUE)
             Log.w(TAG, "No route map: ${e.message}")
             PokewalkerNative.note("Route map not available: ${e.message}")
             null
         } catch (e: Exception) {
+            // the ROM can't be opened right now (moved, no permission, card not mounted): try again in a minute
+            if (key != failedKey) PokewalkerNative.note("Route map: can't read the game (${e.javaClass.simpleName}: ${e.message})")
+            fail(key, SystemClock.elapsedRealtime() + 60_000)
             Log.w(TAG, "Could not draw the route map", e)
             null
         } catch (e: OutOfMemoryError) {
-            failedKey = key
+            fail(key, Long.MAX_VALUE)
             Log.w(TAG, "Not enough memory for the route map", e)
             null
         }
+    }
+
+    private fun fail(key: String, until: Long) {
+        failedKey = key
+        failedUntil = until
     }
 
     /** HeartGold or SoulSilver, from the ROM's game code (IPK... / IPG...). */
