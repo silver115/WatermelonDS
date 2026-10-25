@@ -335,10 +335,17 @@ object FieldMap {
 
     // ---- choosing the spot ------------------------------------------------------------------------------
 
+    /**
+     * Among the windows that show the place nearly as well as the best one (within this share of
+     * its score), the one with the most of its people in view (up to [PEOPLE_WANTED]) is taken.
+     */
+    private const val PEOPLE_LEEWAY = 0.25
+    private const val PEOPLE_WANTED = 3
+
     /** What a window of tiles has in it. */
     private class Census {
         var walk = 0; var grass = 0; var water = 0; var sand = 0; var blocked = 0; var ledge = 0; var ice = 0
-        var buildings = 0; var total = 0
+        var buildings = 0; var total = 0; var people = 0
     }
 
     /** How well a window of tiles shows a [kind] of place. */
@@ -393,6 +400,10 @@ object FieldMap {
         val waterSpots: FloatArray = FloatArray(0),
         /** Lit by the day's light (outside), not a cave's steady one. */
         val outdoor: Boolean = true,
+        /** Water tiles in sight, by [key], with room to draw someone swimming there. */
+        val water: Map<Long, Tile> = emptyMap(),
+        /** The townsfolk and trainers standing in sight ([FieldPeople]). */
+        val people: List<FieldPeople.Person> = emptyList(),
     ) {
         fun tile(gx: Int, gy: Int): Tile? = tiles[key(gx, gy)]
 
@@ -501,6 +512,9 @@ object FieldMap {
         }
         fun ground(gx: Int, gy: Int) = open(gx, gy) && (reach == null || Scene.key(gx, gy) in reach)
 
+        // the people the map always has, to have some of them in view
+        val ownPeople = runCatching { FieldPeople.spots(src, listOf(course.map), log) }.getOrDefault(emptyList())
+
         // the window that shows the course best: what the picture shows, in tiles, kept inside one block
         val across = (width / TILE).roundToInt().coerceIn(6, 30)
         val down = (height / TILE * 1.25).roundToInt().coerceIn(6, 30)
@@ -509,6 +523,8 @@ object FieldMap {
         var best = Double.NEGATIVE_INFINITY
         var bestGx = cells[0][0] * 32 + 16
         var bestGy = cells[0][1] * 32 + 16
+        // every window: its score, how many people it has in view, where it is
+        val windows = ArrayList<DoubleArray>()
         for (cell in cells.take(32)) {
             val l = landAt(cell[0], cell[1]) ?: continue
             val walk = BooleanArray(1024) { ground(cell[0] * 32 + it % 32, cell[1] * 32 + it / 32) }
@@ -518,9 +534,15 @@ object FieldMap {
                 val ty = floor(bd.z / TILE + 16).toInt()
                 if (tx in 0 until 32 && ty in 0 until 32) bld[ty * 32 + tx]++
             }
+            val folk = IntArray(1024)
+            for (sp in ownPeople) {
+                val tx = sp.event.x - cell[0] * 32
+                val ty = sp.event.z - cell[1] * 32
+                if (tx in 0 until 32 && ty in 0 until 32 && (walk[ty * 32 + tx] || isWater(l.behaviors[ty * 32 + tx]))) folk[ty * 32 + tx]++
+            }
             val c = Census()
             for (cy in halfY..(32 - halfY)) for (cx in halfX..(32 - halfX)) {
-                c.walk = 0; c.grass = 0; c.water = 0; c.sand = 0; c.blocked = 0; c.ledge = 0; c.ice = 0; c.buildings = 0
+                c.walk = 0; c.grass = 0; c.water = 0; c.sand = 0; c.blocked = 0; c.ledge = 0; c.ice = 0; c.buildings = 0; c.people = 0
                 c.total = halfX * halfY * 4
                 for (y in cy - halfY until cy + halfY) for (x in cx - halfX until cx + halfX) {
                     val i = y * 32 + x
@@ -533,11 +555,19 @@ object FieldMap {
                     if (isLedge(b)) c.ledge++
                     if (b == 0x20 || b == 0xA8) c.ice++
                     c.buildings += bld[i]
+                    c.people += folk[i]
                 }
                 // a little preference for the middle of the block (less of the neighbours in view)
                 val s = score(course.kind, c) - (abs(cx - 16) + abs(cy - 16)) * 0.05
                 if (s > best) { best = s; bestGx = cell[0] * 32 + cx; bestGy = cell[1] * 32 + cy }
+                if (c.people > 0) windows.add(doubleArrayOf(s, min(c.people, PEOPLE_WANTED).toDouble(), (cell[0] * 32 + cx).toDouble(), (cell[1] * 32 + cy).toDouble()))
             }
+        }
+        // nearly as good, and with some of the people who live there about
+        val floor = best - abs(best) * PEOPLE_LEEWAY
+        windows.filter { it[0] >= floor }.maxWithOrNull(compareBy<DoubleArray> { it[1] }.thenBy { it[0] })?.let {
+            bestGx = it[2].toInt()
+            bestGy = it[3].toInt()
         }
         log("Map for ${course.name}: ${course.place} (map ${course.map}), tiles around $bestGx,$bestGy")
 
@@ -680,6 +710,7 @@ object FieldMap {
         }
         // the water in sight
         val water = ArrayList<Float>()
+        val waterTiles = HashMap<Long, Tile>()
         for (by in by0..by1) for (bx in bx0..bx1) {
             val l = landAt(bx, by) ?: continue
             for (y in 0 until 32) for (x in 0 until 32) {
@@ -687,18 +718,35 @@ object FieldMap {
                 val gx = bx * 32 + x
                 val gy = by * 32 + y
                 val gh = groundY(gx, gy) ?: (matrix.altitude(bx, by) * 8.0)
-                val pr = r.project(gx * TILE + TILE / 2, gh, gy * TILE + TILE / 2) ?: continue
+                val wx = gx * TILE + TILE / 2
+                val wz = gy * TILE + TILE / 2
+                val pr = r.project(wx, gh, wz) ?: continue
                 if (pr[0] < 0f || pr[0] >= width || pr[1] < 0f || pr[1] >= height) continue
                 val d = r.depth[pr[1].toInt() * width + pr[0].toInt()]
                 if (d > pr[2] * 1.02f) continue
                 water.add(pr[0]); water.add(pr[1])
+                if (pr[0] >= 10f && pr[0] <= width - 10f && pr[1] >= 30f && pr[1] <= height - 4f && !l.blocked(x, y)) {
+                    waterTiles[Scene.key(gx, gy)] = Tile(gx, gy, wx, gh, wz, l.behavior(x, y))
+                }
             }
         }
         val start = startTile(tiles, bestGx, bestGy)
         log("${tiles.size} tiles in sight to walk on, starting at ${start?.let { "${it.gx},${it.gy}" }}")
         log("${animation?.size ?: 0} moving pixels, ${water.size / 2} water tiles in sight")
+
+        // the people of the maps in sight
+        val mapsInSight = LinkedHashSet<Int>()
+        mapsInSight.add(course.map)
+        for (by in by0..by1) for (bx in bx0..bx1) {
+            if (landAt(bx, by) != null) matrix.header(bx, by).takeIf { it >= 0 }?.let { mapsInSight.add(it) }
+        }
+        val people = runCatching {
+            val others = FieldPeople.spots(src, mapsInSight.filter { it != course.map }, log)
+            FieldPeople.place(ownPeople + others, tiles, waterTiles)
+        }.getOrElse { log("No people: ${it.message}"); emptyList() }
+        log("${people.size} people in sight")
         return Scene(course, width, height, r.color, r.depth, viewProj, tiles, TILE.toFloat(), start, lightKey(minute, lightType),
-            animation, water.toFloatArray(), followsTheDay(lightType))
+            animation, water.toFloatArray(), followsTheDay(lightType), waterTiles, people)
     }
 
     /** Whether two neighbouring tiles are a step apart (not a cliff). */

@@ -541,7 +541,11 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
         val status = lastStatus ?: return
         val name = status.pokemonName.ifBlank { status.speciesName }
         val text = getString(R.string.pokewalker_explore_caption, map.scene.course.name, map.scene.course.place, map.game) + "\n" +
-            getString(if (map.hasPokemon) R.string.pokewalker_explore_hint else R.string.pokewalker_explore_hint_no_sprite, name)
+            getString(when {
+                !map.hasPokemon -> R.string.pokewalker_explore_hint_no_sprite
+                map.hasPeople -> R.string.pokewalker_explore_hint_people
+                else -> R.string.pokewalker_explore_hint
+            }, name)
         if (exploreCaption?.text?.toString() != text) exploreCaption?.text = text
     }
 

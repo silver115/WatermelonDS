@@ -1,6 +1,8 @@
 import me.magnum.melonds.pokewalker.CryArchive
 import me.magnum.melonds.pokewalker.FieldAnimations
 import me.magnum.melonds.pokewalker.FieldMap
+import me.magnum.melonds.pokewalker.FieldPeople
+import me.magnum.melonds.pokewalker.MapCrowd
 import me.magnum.melonds.pokewalker.MapAmbience
 import me.magnum.melonds.pokewalker.FollowerSprites
 import me.magnum.melonds.pokewalker.MapSpritePainter
@@ -14,7 +16,7 @@ import kotlin.system.exitProcess
 /**
  * The route map on the fake ROM from gen_map_rom.py: which spot is picked, what is drawn, which
  * tiles the Pokémon may walk on and how high, the follower sprite, the wandering and the drawing
- * of the sprite behind things. Usage: MapTest <fake.nds> <fake_without_maps.nds>
+ * of the sprite behind things, and the people of the place. Usage: MapTest <fake.nds> <fake_without_maps.nds>
  */
 private var checks = 0
 private var failures = 0
@@ -284,6 +286,148 @@ fun main(args: Array<String>) {
         check(false, "the shore west of the water is in sight")
     }
 
+    // ---- the people of the place ----
+    check(FieldPeople.eventsBank(33) == 30 && FieldPeople.eventsBank(60) == 57, "Route 29's and New Bark Town's events")
+    check(FieldPeople.modelFor(0x145) == 123 && FieldPeople.modelFor(101) == -1, "the sprite table: a woman, and none for a sprite the story picks")
+    val people = scene.people
+    fun personAt(gx: Int, gy: Int) = people.firstOrNull { it.home.gx == gx && it.home.gy == gy }
+    val woman = personAt(44, 16)
+    val man = personAt(40, 20)
+    val swimmer = personAt(54, 13)
+    check(woman != null && woman.model == 123 && woman.movement == 3 && woman.xRange == 1 && woman.yRange == 1 && !woman.trainer && !woman.swimming,
+        "the woman who wanders a tile either way")
+    check(personAt(45, 16) == null, "someone hidden by a flag isn't there")
+    check(man != null && man.model == 130 && man.trainer && !man.swimming && man.movement == 15, "the trainer facing down")
+    check(swimmer != null && swimmer.swimming && swimmer.model == 138 && swimmer.facing == FollowerSprites.LEFT, "the swimmer in the water, facing left")
+    check(personAt(43, 8) == null, "an apricorn tree isn't a person")
+    check(personAt(34, 2) == null, "nobody up on the rocks, where there's nowhere to stand")
+    check(people.size == 3, "three people in sight (${people.size})")
+
+    val ws = FollowerSprites.loadModel(src, 123)
+    check(ws != null && ws.perDirection == 4 && ws.frames.size == 16 && ws.size == 32, "a person's sprite: sixteen 32x32 frames, four a way")
+    fun dots(f: IntArray) = (0 until 32).count { f[2 * 32 + it] ushr 24 != 0 }
+    if (ws != null) {
+        check(dots(ws.frame(FollowerSprites.UP, 0)) == 1 && dots(ws.frame(FollowerSprites.DOWN, 0)) == 5 &&
+            dots(ws.frame(FollowerSprites.LEFT, 1)) == 10 && dots(ws.frame(FollowerSprites.RIGHT, 3)) == 16,
+            "frames in number order (.1 ... .16), though the file has them by name")
+    }
+    check(FollowerSprites.loadModel(src, 251) == null, "the tree's sprite isn't anyone's")
+    check(FollowerSprites.loadModel(src, 300)?.perDirection == 2, "a Pokémon's sprite: eight frames, two a way")
+
+    if (woman != null && man != null && swimmer != null && ws != null) {
+        // five minutes of them going about, with the Pokémon wandering among them
+        val crowd = MapCrowd(scene, people, Random(5))
+        val walker = MapWanderer(scene, Random(6))
+        walker.blocked = { gx, gy -> crowd.occupied(gx, gy) }
+        check(!crowd.occupied(walker.at.gx, walker.at.gy), "the Pokémon doesn't start on someone")
+        val womanSeen = HashSet<Long>()
+        var strayed = 0; var overlap = 0; var manMoved = 0; var manTurned = 0; var swimmerMoved = 0; var hops = 0; var offTiles = 0
+        val last = crowd.walkers.map { it.at }.toMutableList()
+        var tt = 0L
+        while (tt < 300_000) {
+            walker.update(tt)
+            crowd.update(tt, walker.at, walker.next, walker.facing, walker.next == null)
+            val spots = crowd.walkers.flatMap { listOfNotNull(it.at, it.next) }.map { it.gx to it.gy } + listOfNotNull(walker.at, walker.next).map { it.gx to it.gy }
+            if (spots.size != spots.toSet().size) overlap++
+            crowd.walkers.forEachIndexed { i, w ->
+                if (w.at !== last[i]) {
+                    if (abs(w.at.gx - last[i].gx) + abs(w.at.gy - last[i].gy) != 1) hops++
+                    last[i] = w.at
+                }
+                when (w.person) {
+                    woman -> {
+                        womanSeen.add(FieldMap.Scene.key(w.at.gx, w.at.gy))
+                        if (abs(w.at.gx - 44) > 1 || abs(w.at.gy - 16) > 1) strayed++
+                        if (scene.tile(w.at.gx, w.at.gy) == null) offTiles++
+                    }
+                    man -> {
+                        if (w.at.gx != 40 || w.at.gy != 20 || w.next != null) manMoved++
+                        val beside = abs(walker.at.gx - 40) + abs(walker.at.gy - 20) == 1
+                        if (w.facing != FollowerSprites.DOWN && !beside) manTurned++
+                    }
+                    swimmer -> if (w.at.gx != 54 || w.at.gy != 13 || w.next != null) swimmerMoved++
+                }
+            }
+            tt += 40
+        }
+        check(womanSeen.size >= 3, "the woman walks about (${womanSeen.size} tiles)")
+        check(strayed == 0 && offTiles == 0, "but never more than a tile from home, always on ground")
+        check(hops == 0, "people only ever step to the next tile")
+        check(overlap == 0, "nobody walks into anyone, the Pokémon included ($overlap times)")
+        check(manMoved == 0 && manTurned == 0, "the trainer stays put facing down ($manMoved, $manTurned)")
+        check(swimmerMoved == 0, "the swimmer stays put")
+        val wp = crowd.walkers.first { it.person === woman }.pose(tt)
+        check(wp.grass, "standing in tall grass, the woman's feet are hidden too")
+
+        // a crowd of wanderers on a patch of ground: they never share a tile
+        val patch = scene.tiles.values.filter { it.gx in 38..43 && it.gy in 10..14 }.take(6)
+        check(patch.size == 6, "a patch of ground for a crowd")
+        val busy = MapCrowd(scene, patch.map { FieldPeople.Person(123, it, 3, 1, 2, 2, false, false) }, Random(9))
+        var crowded = 0
+        var moves = 0
+        var tb = 0L
+        val was = busy.walkers.map { it.at }.toMutableList()
+        while (tb < 120_000) {
+            busy.update(tb, null, null, 0, false)
+            val spots = busy.walkers.flatMap { listOfNotNull(it.at, it.next) }.map { it.gx to it.gy }
+            if (spots.size != spots.toSet().size) crowded++
+            busy.walkers.forEachIndexed { i, w -> if (w.at !== was[i]) { moves++; was[i] = w.at } }
+            tb += 40
+        }
+        check(moves > 20 && crowded == 0, "six wanderers close together never share a tile ($moves steps, $crowded clashes)")
+
+        // the Pokémon walks up to the trainer and looks at him: he turns to it
+        val talk = MapCrowd(scene, listOf(man), Random(1))
+        val west = scene.tile(39, 20)
+        val pk = MapWanderer(scene, Random(2))
+        pk.blocked = { gx, gy -> talk.occupied(gx, gy) }
+        check(west != null, "a tile beside the trainer")
+        if (west != null) {
+            var t2 = 1_000L
+            pk.placeAt(west)
+            pk.update(t2); talk.update(t2, pk.at, pk.next, pk.facing, pk.next == null)
+            pk.walk(FollowerSprites.RIGHT, false, t2)
+            repeat(10) { t2 += 50; pk.update(t2); talk.update(t2, pk.at, pk.next, pk.facing, pk.next == null) }
+            check(pk.at === west && pk.facing == FollowerSprites.RIGHT, "it can't walk through him, it turns to him")
+            check(talk.walkers[0].facing == FollowerSprites.LEFT, "and he turns to it, as if talked to")
+            check(talk.walkers[0].at.gx == 40, "without moving")
+            // it goes away: he looks back down
+            pk.placeAt(scene.tiles.values.first { abs(it.gx - 40) + abs(it.gy - 20) > 4 })
+            repeat(80) { t2 += 50; pk.update(t2); talk.update(t2, pk.at, pk.next, pk.facing, pk.next == null) }
+            check(talk.walkers[0].facing == FollowerSprites.DOWN, "left alone, he faces the way he did")
+
+            // sent over to him (a tap on him), it ends up beside him looking at him
+            val east = scene.tile(41, 20)
+            check(east != null, "the tile on his other side")
+            if (east != null) {
+                val sent = pk.goTo(east, t2, man.home)
+                check(sent, "it can be sent beside him")
+                val until = t2 + 60 * MapWanderer.STEP_MS
+                while (t2 < until && (pk.at !== east || pk.next != null)) { t2 += 20; pk.update(t2); talk.update(t2, pk.at, pk.next, pk.facing, pk.next == null) }
+                repeat(5) { t2 += 20; pk.update(t2); talk.update(t2, pk.at, pk.next, pk.facing, pk.next == null) }
+                check(pk.at === east && pk.facing == FollowerSprites.LEFT, "it arrives and looks at him (${pk.at.gx},${pk.at.gy} facing ${pk.facing})")
+                check(talk.walkers[0].facing == FollowerSprites.RIGHT, "and he looks at it")
+            }
+        }
+
+        // drawn: a person with a shadow, the swimmer without
+        val pp = MapSpritePainter(scene, ws)
+        val home = woman.home
+        pp.paint(MapWanderer.Pose(home.x, home.y, home.z, FollowerSprites.DOWN, 0, 0.0, false))
+        check(pp.buffer.count { it == 0x48000000 } > 10 && pp.buffer.any { it ushr 24 == 0xFF }, "a person is drawn with a shadow")
+        val sp = MapSpritePainter(scene, FollowerSprites.loadModel(src, 138)!!).apply { shadow = false }
+        sp.paint(MapWanderer.Pose(swimmer.home.x, swimmer.home.y, swimmer.home.z, swimmer.facing, 0, 0.0, false))
+        check(sp.buffer.none { it == 0x48000000 } && sp.buffer.any { it ushr 24 == 0xFF }, "the swimmer has no shadow on the water")
+        check(scene.water.containsKey(FieldMap.Scene.key(54, 13)) && scene.tile(54, 13) == null, "the swimmer's tile is water, not ground")
+    }
+    check(FieldPeople.readObjects(ByteArray(8)).isEmpty(), "an event file with nothing in it")
+    try {
+        FieldPeople.readObjects(ByteArray(4) + byteArrayOf(9, 0, 0, 0) + ByteArray(40))
+        check(false, "a cut-short event file: an error")
+    } catch (e: Exception) {
+        check(e.message?.contains("9 objects") == true, "a cut-short event file: an error (${e.message})")
+    }
+
     // ---- the cave course: only the real cave floor ----
     val cave = FieldMap.render(src, FieldMap.COURSES[5], w, h, 900)
     check(cave.tiles.isNotEmpty(), "cave tiles to walk on")
@@ -299,6 +443,7 @@ fun main(args: Array<String>) {
         check(e.wholeRom, "no map files: nothing can come from this ROM (${e.message})")
     }
     check(FollowerSprites.load(source(args[1]), 25, 0, false, false) == null, "no sprites in that ROM")
+    check(FieldPeople.spots(source(args[1]), listOf(33)).isEmpty(), "no people in that ROM")
 
     println("$checks checks, $failures failed")
     exitProcess(if (failures == 0) 0 else 1)

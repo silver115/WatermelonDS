@@ -15,7 +15,12 @@ The fake world:
   - matrix 42 (the "Dim Cave" course, map 99, area 87 with the steady cave light): one block,
     land 2: cave floor in x 4-12, y 4-12 ringed with blocked tiles, open "void" around it;
   - follower sprites: every species gets the same eight 32x32 frames, a normal and a shiny
-    palette.
+    palette;
+  - people (`a/0/3/2`, member 30: Route 29's events): a woman wandering a tile either way at
+    (44, 16), someone hidden by a flag next to her, a man facing down at (40, 20), a swimmer in
+    the water at (54, 13), an apricorn tree (a sprite that isn't a person) at (43, 8) and
+    someone on a wall at (34, 2); their sprites (mmodel 123, 130 and 138) have sixteen frames
+    each, the tree's (251) seven.
 """
 import struct, sys
 
@@ -411,6 +416,39 @@ def follower_btx():
     shiny = [0, rgb(248, 120, 160), rgb(40, 40, 40)] + [0] * 13
     return nitro_file(b'BTX0', [tex0(textures, [('normal_pl', normal), ('shiny_pl', shiny)])])
 
+# sprite numbers (the game's sprite table) of the people's overworld sprites
+SPRITE_WOMAN, SPRITE_MAN, SPRITE_SWIMMER, SPRITE_TREE = 0x145, 0x14C, 0x156, 0x106   # mmodel 123, 130, 138, 251
+ROUTE29_EVENTS = 30
+
+def person_btx(name, colour):
+    """Sixteen 32x32 frames, four a way (stand, step, stand, other step), named like the game's
+    (name.1 ... name.16) and stored in the game's order (by name: .1, .10, .11 ... .16, .2 ...).
+    Frame n has n + 1 dots in its top row, so the test can tell which frame is drawn."""
+    textures = []
+    for n in range(16):
+        px = [[0] * 32 for _ in range(32)]
+        for y in range(10, 30):
+            for x in range(11, 21): px[y][x] = 1
+        for k in range(n + 1): px[2][k * 2] = 2
+        data = b''
+        for y in range(32):
+            for x in range(0, 32, 2): data += u8(px[y][x] | (px[y][x + 1] << 4))
+        textures.append(('%s.%d' % (name, n + 1), 32, 32, 3, data, True))
+    textures.sort(key=lambda t: t[0])
+    return nitro_file(b'BTX0', [tex0(textures, [(name, [0, colour, rgb(20, 20, 20)] + [0] * 13)])])
+
+def static_btx(name, count):
+    textures = [('%s.%d' % (name, n + 1), 32, 32, 3, b'\x11' * 512, True) for n in range(count)]
+    return nitro_file(b'BTX0', [tex0(textures, [(name, [0, rgb(200, 120, 40)] + [0] * 14)])])
+
+def event_file(objects):
+    """files/fielddata/eventdata/zone_event.json.txt: one bg event, then the objects (sprite,
+    movement, type, flag, facing, x range, y range, x, z), no warps or coordinate triggers."""
+    out = u32(1) + b'\0' * 20 + u32(len(objects))
+    for i, (sprite, movement, kind, flag, facing, xr, yr, x, z) in enumerate(objects):
+        out += b''.join(u16(v) for v in (i, sprite, movement, kind, flag, 0, facing, 0, 0, 0, xr, yr, x, z)) + u32(0)
+    return out + u32(0) + u32(0)
+
 def build():
     files = {}
     # map matrices: 0 the overworld, 42 the cave, the rest a single empty cell
@@ -450,7 +488,23 @@ def build():
     # follower sprites: one set of frames shared by every member
     btx = follower_btx()
     count = 297 + 0x224 + 2
-    files['a/0/8/1'] = narc([b''] * 297 + [btx] + [b''] * (count - 298), shared={i: 297 for i in range(298, count)})
+    members = [b''] * 297 + [btx] + [b''] * (count - 298)
+    members[123] = person_btx('gswoman1', rgb(232, 96, 140))
+    members[130] = person_btx('gsbigman', rgb(80, 120, 220))
+    members[138] = person_btx('gsswimmerm', rgb(240, 200, 160))
+    members[251] = static_btx('bonguri', 7)
+    files['a/0/8/1'] = narc(members, shared={i: 297 for i in range(298, count)})
+    # people: Route 29's events (the others are empty)
+    route29 = event_file([
+        (SPRITE_WOMAN, 3, 0, 0, 1, 1, 1, 32 + 12, 16),        # wanders a tile either way
+        (SPRITE_WOMAN, 0, 0, 0x123, 1, 0, 0, 32 + 13, 16),    # hidden by a flag
+        (SPRITE_MAN, 15, 1, 0, 0, 0, 0, 32 + 8, 20),          # a trainer facing down
+        (SPRITE_SWIMMER, 0, 1, 0, 2, 0, 0, 32 + 22, 13),      # in the water, facing left
+        (SPRITE_TREE, 0, 0, 0, 1, 0, 0, 32 + 11, 8),          # an apricorn tree: not a person
+        (SPRITE_MAN, 0, 0, 0, 1, 0, 0, 32 + 2, 2),            # up on the rocks: nowhere to stand
+    ])
+    empty_events = event_file([])
+    files['a/0/3/2'] = narc([empty_events] * ROUTE29_EVENTS + [route29] + [empty_events] * 4)
     return files
 
 if __name__ == '__main__':

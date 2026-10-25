@@ -18,13 +18,15 @@ import java.util.Calendar
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.roundToInt
 
 /**
  * The real place of the walk, from the player's own HeartGold/SoulSilver ROM ([FieldMap]), with
- * the walking Pokémon exploring it ([MapWanderer], [MapSpritePainter]). The game's own moving
+ * the walking Pokémon exploring it ([MapWanderer], [MapSpritePainter]) among the townsfolk and
+ * trainers who live there ([FieldPeople], [MapCrowd]). The game's own moving
  * textures play on it (the sea, waves on the shore, rivers, flowers: [SceneAnimation]) and little
  * things move over it ([MapAmbience]). It is drawn in the DS's own pixels, made [scale] times
  * bigger to fill the screen.
@@ -38,14 +40,39 @@ class RouteMap internal constructor(
     internal val key: String,
     internal val pokemon: WalkingPokemon?,
     previous: RouteMap?,
+    /** Sprites of the people in [scene] by their overworld sprite number; people without one aren't shown. */
+    internal val peopleSprites: Map<Int, FollowerSprites.Sprite> = emptyMap(),
 ) {
     private val picture: Bitmap = Bitmap.createBitmap(scene.image, scene.width, scene.height, Bitmap.Config.ARGB_8888)
+    private val crowd: MapCrowd? = scene.people.filter { it.model in peopleSprites }.takeIf { it.isNotEmpty() }?.let { MapCrowd(scene, it) }
+    private val people: List<Figure> = crowd?.walkers?.map { w ->
+        val p = MapSpritePainter(scene, peopleSprites.getValue(w.person.model)).apply { shadow = !w.person.swimming }
+        Figure(p, Bitmap.createBitmap(p.bufferWidth, p.bufferHeight, Bitmap.Config.ARGB_8888), w)
+    } ?: emptyList()
     private val wanderer: MapWanderer? = if (scene.tiles.isEmpty()) null else MapWanderer(scene).also { w ->
         // the same place drawn again (new light): it carries on from where it was
         previous?.wanderer?.at?.let { at -> scene.tile(at.gx, at.gy)?.let { w.placeAt(it) } }
+        crowd?.let { c ->
+            w.blocked = { gx, gy -> c.occupied(gx, gy) }
+            // not on top of someone
+            if (c.occupied(w.at.gx, w.at.gy)) {
+                scene.tiles.values.filter { !c.occupied(it.gx, it.gy) }
+                    .minByOrNull { abs(it.gx - w.at.gx) + abs(it.gy - w.at.gy) }
+                    ?.let { w.placeAt(it) }
+            }
+        }
     }
     private val painter = if (sprite != null && wanderer != null) MapSpritePainter(scene, sprite) else null
     private val spriteBitmap = painter?.let { Bitmap.createBitmap(it.bufferWidth, it.bufferHeight, Bitmap.Config.ARGB_8888) }
+
+    /** Someone drawn in the picture: how to paint them, their picture, and (for people) who they are. */
+    private class Figure(val painter: MapSpritePainter, val bitmap: Bitmap, val walker: MapCrowd.Walker?) {
+        var pose: MapWanderer.Pose? = null
+        var feetY = 0f
+        var lastTile: FieldMap.Tile? = null
+    }
+    private val pokemonFigure = if (painter != null && spriteBitmap != null) Figure(painter, spriteBitmap, null) else null
+    private val drawOrder = ArrayList<Figure>()
     private val paint = Paint().apply {
         isFilterBitmap = false
         isDither = false
@@ -69,6 +96,9 @@ class RouteMap internal constructor(
 
     /** Whether the Pokémon is drawn walking around. */
     val hasPokemon get() = painter != null
+
+    /** Whether any of the place's people are about. */
+    val hasPeople get() = people.isNotEmpty()
 
     val species get() = pokemon?.species ?: 0
 
@@ -106,20 +136,44 @@ class RouteMap internal constructor(
         }
         canvas.drawBitmap(picture, 0f, 0f, paint)
         val wd = wanderer
-        val p = painter
-        val b = spriteBitmap
-        if (wd != null && p != null && b != null) {
+        drawOrder.clear()
+        if (wd != null) {
             wd.update(now)
             val pose = wd.pose(now)
-            if (p.paint(pose)) {
-                b.setPixels(p.buffer, 0, p.bufferWidth, 0, 0, p.bufferWidth, p.bufferHeight)
-                canvas.drawBitmap(b, p.left.toFloat(), p.top.toFloat(), paint)
+            pokemonFigure?.let { f ->
+                f.pose = pose
+                f.feetY = scene.project(pose.x, pose.y, pose.z)?.get(1) ?: 0f
+                drawOrder.add(f)
             }
             // stepping into tall grass shakes it
             val at = wd.at
             if (at !== lastTile) {
                 if (lastTile != null && at.tallGrass) scene.project(at.x, at.y, at.z)?.let { ambience.rustle(it[0], it[1], now) }
                 lastTile = at
+            }
+        }
+        crowd?.let { c ->
+            c.update(now, wd?.at, wd?.next, wd?.facing ?: 0, wd != null && wd.next == null)
+            for (f in people) {
+                val w = f.walker ?: continue
+                val pose = w.pose(now)
+                f.pose = pose
+                f.feetY = scene.project(pose.x, pose.y, pose.z)?.get(1) ?: continue
+                drawOrder.add(f)
+                if (w.at !== f.lastTile) {
+                    if (f.lastTile != null && w.at.tallGrass) scene.project(w.at.x, w.at.y, w.at.z)?.let { ambience.rustle(it[0], it[1], now) }
+                    f.lastTile = w.at
+                }
+            }
+        }
+        // further back first, so whoever is nearer is drawn over them
+        drawOrder.sortBy { it.feetY }
+        for (f in drawOrder) {
+            val p = f.painter
+            val pose = f.pose ?: continue
+            if (p.paint(pose)) {
+                f.bitmap.setPixels(p.buffer, 0, p.bufferWidth, 0, 0, p.bufferWidth, p.bufferHeight)
+                canvas.drawBitmap(f.bitmap, p.left.toFloat(), p.top.toFloat(), paint)
             }
         }
         if (minuteAt == Long.MIN_VALUE || now - minuteAt > 10_000) {
@@ -169,6 +223,16 @@ class RouteMap internal constructor(
         if (painter?.hit(px, py) == true) {
             wd.hop(now)
             return true
+        }
+        // on someone: it goes up to them and looks at them, and they turn to it
+        people.filter { it.painter.hit(px, py) }.maxByOrNull { it.feetY }?.walker?.let { w ->
+            val t = w.next ?: w.at
+            val from = wd.next ?: wd.at
+            val spots = intArrayOf(0, 1, 0, -1, 1, 0, -1, 0)
+            val besides = (0 until 4).mapNotNull { i -> scene.tile(t.gx + spots[i * 2], t.gy + spots[i * 2 + 1]) }
+                .sortedBy { abs(it.gx - from.gx) + abs(it.gy - from.gy) }
+            for (b in besides) if (wd.goTo(b, now, t)) return false
+            return false
         }
         scene.tileNear(px, py, scene.tilePixels * 2f)?.let { wd.goTo(it, now) }
         return false
@@ -295,11 +359,18 @@ object RouteMaps {
                         else runCatching { FollowerSprites.load(src, p.species, p.form, p.female, p.shiny) }.getOrNull()
                     }
                     val game = gameName(src)
+                    // the people's sprites, once per sprite
+                    val peopleSprites = sameScene?.peopleSprites ?: HashMap<Int, FollowerSprites.Sprite>().also { m ->
+                        for (model in scene.people.map { it.model }.distinct()) {
+                            runCatching { FollowerSprites.loadModel(src, model) }.getOrNull()?.let { m[model] = it }
+                        }
+                    }
                     if (sameScene == null) {
                         PokewalkerNative.note("Route map: ${course.place} from $game for ${course.name}, " +
-                            "${scene.tiles.size} tiles to explore (${(System.nanoTime() - t0) / 1_000_000} ms)")
+                            "${scene.tiles.size} tiles to explore, ${scene.people.count { it.model in peopleSprites }} people " +
+                            "(${(System.nanoTime() - t0) / 1_000_000} ms)")
                     }
-                    RouteMap(scene, sprite, game, size[2], key, pokemon, previous)
+                    RouteMap(scene, sprite, game, size[2], key, pokemon, previous, peopleSprites)
                 }
             }
         } catch (e: FieldMap.MapException) {

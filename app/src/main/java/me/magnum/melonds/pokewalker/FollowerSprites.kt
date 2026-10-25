@@ -11,7 +11,7 @@ package me.magnum.melonds.pokewalker
 object FollowerSprites {
     const val MMODEL = "a/0/8/1"
     /** MMODEL_FOLLOWER_MON_BASE (include/constants/mmodel.h). */
-    private const val FIRST = 297
+    const val FIRST = 297
     private const val LAST = 862
 
     const val UP = 0
@@ -55,9 +55,13 @@ object FollowerSprites {
         return (FIRST + i).coerceAtMost(LAST)
     }
 
-    /** Frames of one sprite: [direction * 2 + step] (see [UP] ...), ARGB, [size] x [size]. */
-    class Sprite(val frames: Array<IntArray>, val size: Int) {
-        fun frame(direction: Int, step: Int): IntArray = frames[(direction * 2 + (step and 1)).coerceIn(0, frames.size - 1)]
+    /**
+     * Frames of one sprite: [direction * perDirection + step] (see [UP] ...), ARGB, [size] x [size].
+     * Pokémon have two a way (two steps); people four (stand, step, stand, other step).
+     */
+    class Sprite(val frames: Array<IntArray>, val size: Int, val perDirection: Int = 2) {
+        fun frame(direction: Int, step: Int): IntArray =
+            frames[(direction * perDirection + Math.floorMod(step, perDirection)).coerceIn(0, frames.size - 1)]
     }
 
     /** Reads the sprite; null when the ROM doesn't have it in the expected shape. */
@@ -67,6 +71,36 @@ object FollowerSprites {
         if (index >= narc.count) return null
         val set = Nitro.parse(narc.read(index)).texSet ?: return null
         return fromTexSet(set, shiny)
+    }
+
+    /**
+     * Someone's overworld sprite by its mmodel number ([FieldPeople.modelFor]): a person's
+     * sixteen frames, or a Pokémon's eight; null when it's neither (signs, trees, rocks).
+     */
+    fun loadModel(src: CryArchive.Source, model: Int): Sprite? {
+        val narc = Nitro.narc(src, MMODEL) ?: return null
+        if (model < 0 || model >= narc.count) return null
+        val set = Nitro.parse(narc.read(model)).texSet ?: return null
+        return fromPersonTexSet(set) ?: if (model >= FIRST) fromTexSet(set, false) else null
+    }
+
+    /** A person's sixteen frames, by the number after the dot (gswoman1.1 ... .16), with palette 0. */
+    fun fromPersonTexSet(set: Nitro.TexSet): Sprite? {
+        if (set.textures.size < 16) return null
+        val ordered = set.textures.entries
+            .map { (it.key.substringAfterLast('.').toIntOrNull() ?: Int.MAX_VALUE) to it.value }
+            .sortedBy { it.first }
+            .take(16)
+        if (ordered.any { it.first == Int.MAX_VALUE }) return null
+        val pal = set.palettes.values.firstOrNull() ?: return null
+        val size = ordered[0].second.width
+        if (size != 32 && size != 64) return null
+        val frames = Array(16) { i ->
+            val t = ordered[i].second
+            if (t.width != size || t.height != size) return null
+            Nitro.decode(t, pal) ?: return null
+        }
+        return Sprite(frames, size, 4)
     }
 
     /** The eight frames in the texture set's order (tsure_poke.1, .10 ... .16), with palette 0 or the shiny one. */
