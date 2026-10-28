@@ -54,7 +54,7 @@ Java_me_magnum_melonds_pokewalker_PokewalkerNative_note(JNIEnv* env, jobject, js
 JNIEXPORT jstring JNICALL
 Java_me_magnum_melonds_pokewalker_PokewalkerNative_speciesName(JNIEnv* env, jobject, jint species)
 {
-    const char* name = species > 0 && species < 0x10000 ? pokewalker::SpeciesName(static_cast<u16>(species)) : "";
+    const char* name = species > 0 && species < 0x10000 ? pokewalker::SpeciesName(static_cast<pokewalker::u16>(species)) : "";
     return env->NewStringUTF(name ? name : "");
 }
 
