@@ -4,6 +4,8 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
@@ -15,6 +17,7 @@ import kotlinx.coroutines.withContext
 import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.util.Calendar
+import java.util.IdentityHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -22,6 +25,7 @@ import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.roundToInt
+import kotlin.math.sin
 
 /** What else the place has, read from the ROM and the walker along with it. */
 class MapExtras(
@@ -38,6 +42,13 @@ class MapExtras(
     val unown: IntArray = IntArray(0),
     /** Where this course's berry patch keeps its state (null: no patch). */
     val berryStore: MapGames.BerryStore? = null,
+    /** The game's field effects (emote bubbles, splashes, footprints, sparkles, the item ball). */
+    val art: FieldEffectArt? = null,
+    /** The walk's own items, for item balls. */
+    val items: IntArray = IntArray(0),
+    /** Bird Pokémon flying over, and the Magikarp leaping out of the water (sprites among the people's). */
+    val birds: List<MapCrowd.WildKind> = emptyList(),
+    val magikarp: MapCrowd.WildKind? = null,
 )
 
 /**
@@ -46,8 +57,11 @@ class MapExtras(
  * trainers who live there ([FieldPeople], [MapCrowd]), the course's wild Pokémon coming out of
  * the grass, a Pokémon caught on the walk following along ([MapBuddy]), and little games
  * ([MapGames]). The game's own moving textures play on it (the sea, waves on the shore, rivers,
- * flowers: [SceneAnimation]) and little things and the weather move over it ([MapAmbience]). It
- * is drawn in the DS's own pixels, made [scale] times bigger to fill the screen.
+ * flowers: [SceneAnimation]), its windmills turn and doors open ([SceneProps]), windows and
+ * lamps glow after dark, little things and the weather move over it ([MapAmbience]), and the
+ * game's own effects ([FieldEffects]) and life ([MapLife]: item balls, a tossed berry, birds
+ * flying over, sleep, moods, emote bubbles) go on. It is drawn in the DS's own pixels, made
+ * [scale] times bigger to fill the screen.
  */
 class RouteMap internal constructor(
     val scene: FieldMap.Scene,
@@ -95,10 +109,16 @@ class RouteMap internal constructor(
         MapBuddy(scene, start)
     }
 
+    /** Someone or something on tile ([gx], [gy]): people, the berry patch, an item ball, a berry thrown there. */
+    private fun taken(gx: Int, gy: Int): Boolean {
+        val berry = berryTile
+        return crowd.occupied(gx, gy) || (berry != null && berry.gx == gx && berry.gy == gy) || life?.blocks(gx, gy) == true
+    }
+
     init {
         wanderer?.let { w ->
             val berry = berryTile
-            w.blocked = { gx, gy -> crowd.occupied(gx, gy) || (berry != null && berry.gx == gx && berry.gy == gy) }
+            w.blocked = { gx, gy -> taken(gx, gy) }
             // not on top of someone
             if (crowd.occupied(w.at.gx, w.at.gy) || w.at === berry) {
                 scene.tiles.values.filter { !crowd.occupied(it.gx, it.gy) && it !== berry }
@@ -118,6 +138,30 @@ class RouteMap internal constructor(
         }
     }
 
+    private val effects = FieldEffects(scene, extras.art)
+
+    /** Life on the map: item balls, a tossed berry, birds and Magikarp, sleep, moods, emotes. */
+    private val life: MapLife? = wanderer?.let { w ->
+        MapLife(scene, w, crowd, effects).also { l ->
+            l.items = extras.items
+            l.birds = extras.birds.filter { it.model in peopleSprites }
+            l.magikarp = extras.magikarp?.takeIf { it.model in peopleSprites }
+            l.shiny = pokemon?.shiny == true && sprite != null
+            l.buddy = buddy
+            l.buddyShiny = extras.buddy?.shiny == true && buddy != null
+            l.games = games
+            l.pokemonSize = sprite?.size ?: 32
+            l.buddySize = extras.buddySprite?.size ?: 32
+            l.free = { t ->
+                val bd = buddy
+                !crowd.occupied(t.gx, t.gy) && (berryTile == null || berryTile.gx != t.gx || berryTile.gy != t.gy) &&
+                    (bd == null || ((bd.at.gx != t.gx || bd.at.gy != t.gy) && bd.next?.let { it.gx == t.gx && it.gy == t.gy } != true))
+            }
+            // the same walk drawn again: it carries on as it was (asleep, say)
+            previous?.life?.let { l.carryOn(it) }
+        }
+    }
+
     private val painter = if (sprite != null && wanderer != null) MapSpritePainter(scene, sprite) else null
     private val spriteBitmap = painter?.let { Bitmap.createBitmap(it.bufferWidth, it.bufferHeight, Bitmap.Config.ARGB_8888) }
 
@@ -126,6 +170,8 @@ class RouteMap internal constructor(
         var pose: MapWanderer.Pose? = null
         var feetY = 0f
         var lastTile: FieldMap.Tile? = null
+        /** Drawn this frame (where [painter] says). */
+        var painted = false
     }
     private fun figure(sprite: FollowerSprites.Sprite, walker: MapCrowd.Walker? = null, shadow: Boolean = true): Figure {
         val p = MapSpritePainter(scene, sprite).apply { this.shadow = shadow }
@@ -136,6 +182,12 @@ class RouteMap internal constructor(
     private val people = HashMap<MapCrowd.Walker, Figure>()
     private val berryFigures = HashMap<Int, Figure>()
     private val leapFigures = HashMap<Int, Figure>()
+    private val flyerFigures = HashMap<Int, Figure>()
+    private val ballSprite: FollowerSprites.Sprite? = extras.art?.frames("monstarball")?.firstOrNull()?.let { img ->
+        FollowerSprites.Sprite(arrayOf(img.pixels), img.width, 1).takeIf { img.width == img.height }
+    }
+    private val ballFigure = ballSprite?.let { figure(it) }
+    private val treatFigures = HashMap<Int, Figure>()
     private val drawOrder = ArrayList<Figure>()
     private val paint = Paint().apply {
         isFilterBitmap = false
@@ -153,6 +205,24 @@ class RouteMap internal constructor(
     private val linePaint = Paint().apply { color = 0xC8F0F0F0.toInt(); strokeWidth = 0.6f; isAntiAlias = true }
     private val tintPaint = Paint()
     private val darkPaint = Paint()
+    private val effectPaint = Paint().apply { isFilterBitmap = false }
+    private val effectRect = RectF()
+    private val groundDraws = ArrayList<FieldEffects.Draw>()
+    private val airDraws = ArrayList<FieldEffects.Draw>()
+    private val glowPaint = Paint().apply {
+        isFilterBitmap = true
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.SCREEN)
+    }
+    private val glowRect = RectF()
+    /** The buildings that move (windmills, doors) over the picture. */
+    private val props = scene.props
+    private val propsBitmap: Bitmap? = props?.let { p ->
+        Bitmap.createBitmap(scene.width, scene.height, Bitmap.Config.ARGB_8888).also { it.setPixels(p.overlay, 0, scene.width, 0, 0, scene.width, scene.height) }
+    }
+    private val propsFrame = IntArray(if (props != null) scene.width * scene.height else 0)
+    @Volatile private var propsReady = false
+    private var doorOpened: Pair<FieldMap.Tile, SceneProps.Prop>? = null
+    private var weatherNow = MapAmbience.Weather.CLEAR
     private var lastTick = Long.MIN_VALUE
     private val animFrame = IntArray(scene.width * scene.height)
     private val animBusy = AtomicBoolean(false)
@@ -160,6 +230,7 @@ class RouteMap internal constructor(
     private var minute = 0
     private var minuteAt = Long.MIN_VALUE
     private var lastTile: FieldMap.Tile? = null
+    private var lastGameLeap: MapGames.Leap? = null
     private var sparkAt = 0L
     private var lightX = scene.width / 2f
     private var lightY = scene.height / 2f
@@ -176,6 +247,32 @@ class RouteMap internal constructor(
     var steps: Long = 0
         set(value) { field = value; games?.steps = value }
 
+    /** The walker's steps, today's and the day's goal: its mood follows them, and new steps wake it up. */
+    fun setSteps(total: Long, today: Long, goal: Int, now: Long) {
+        steps = total
+        life?.setSteps(total, today, goal, now)
+    }
+
+    /** Whether the Pokémon is asleep. */
+    val asleep get() = life?.asleep == true
+
+    /** Today's steps reached the goal: it's delighted. */
+    fun celebrate(now: Long) {
+        life?.celebrate(now)
+    }
+
+    /** Throws a berry towards box point ([x], [y]) for the Pokémon to eat; false when it can't be. */
+    fun toss(x: Float, y: Float, now: Long): Boolean {
+        val l = life ?: return false
+        val px = (x - offsetX) / scale
+        val py = (y - offsetY) / scale
+        val tile = scene.tileNear(px, py, scene.tilePixels * 2.5f) ?: return false.also { l.interacted(now) }
+        return l.toss(tile, scene.width / 2f, scene.height + 8f, now)
+    }
+
+    /** Throws a berry a few steps from the Pokémon. */
+    fun tossNear(now: Long): Boolean = life?.tossNear(scene.width / 2f, scene.height + 8f, now) == true
+
     /** Whether the Pokémon is walking (draw often then). */
     fun moving(now: Long) = wanderer?.pose(now)?.moving == true
 
@@ -183,15 +280,20 @@ class RouteMap internal constructor(
     fun availableGames(): List<MapGames.Game> = games?.available() ?: emptyList()
     val gameOn: MapGames.Game? get() = games?.game
     fun gameLine(now: Long): MapGames.Line? = games?.lineAt(now)
-    fun startGame(g: MapGames.Game, now: Long): Boolean = games?.start(g, now) == true
+    fun startGame(g: MapGames.Game, now: Long): Boolean {
+        life?.interacted(now)
+        return games?.start(g, now) == true
+    }
     fun stopGame(now: Long) { games?.stop(now) }
 
-    /** Species whose cry should play now (something was caught). */
+    /** Species whose cry should play now (something was caught, a berry eaten). */
     fun takeCries(): List<Int> {
-        val g = games ?: return emptyList()
-        if (g.cries.isEmpty()) return emptyList()
-        val out = g.cries.toList()
-        g.cries.clear()
+        val out = ArrayList<Int>()
+        games?.let { out.addAll(it.cries); it.cries.clear() }
+        life?.let { l ->
+            for (c in l.cries) if (c == MapLife.OWN_CRY) { if (species > 0) out.add(species) } else out.add(c)
+            l.cries.clear()
+        }
         return out
     }
 
@@ -202,19 +304,24 @@ class RouteMap internal constructor(
         canvas.save()
         canvas.translate(offsetX, offsetY)
         canvas.scale(scale.toFloat(), scale.toFloat())
-        // the game's moving textures, at 10 steps a second of its 30, coloured in the background
+        // the game's moving textures and buildings, at 10 steps a second of its 30, done in the background
         val anim = scene.animation
+        val pr = props
         val tick = now * 30 / 1000 / 3 * 3
-        if (anim != null && tick != lastTick && animBusy.compareAndSet(false, true)) {
+        if ((anim != null || pr != null) && tick != lastTick && animBusy.compareAndSet(false, true)) {
             lastTick = tick
             animator.execute {
                 try {
-                    if (anim.update(tick)) {
+                    if (anim != null && anim.update(tick)) {
                         synchronized(animFrame) { System.arraycopy(scene.image, 0, animFrame, 0, animFrame.size) }
                         animReady = true
                     }
+                    if (pr != null && pr.update(tick, scene.image)) {
+                        synchronized(propsFrame) { System.arraycopy(pr.overlay, 0, propsFrame, 0, propsFrame.size) }
+                        propsReady = true
+                    }
                 } catch (e: Exception) {
-                    Log.w("RouteMap", "Texture animation stopped", e)
+                    Log.w("RouteMap", "Animation stopped", e)
                 } finally {
                     animBusy.set(false)
                 }
@@ -225,15 +332,28 @@ class RouteMap internal constructor(
             synchronized(animFrame) { picture.setPixels(animFrame, 0, scene.width, 0, 0, scene.width, scene.height) }
         }
         canvas.drawBitmap(picture, 0f, 0f, paint)
+        propsBitmap?.let { b ->
+            if (propsReady) {
+                propsReady = false
+                synchronized(propsFrame) { b.setPixels(propsFrame, 0, scene.width, 0, 0, scene.width, scene.height) }
+            }
+            canvas.drawBitmap(b, 0f, 0f, paint)
+        }
         if (minuteAt == Long.MIN_VALUE || now - minuteAt > 10_000) {
             minuteAt = now
             val cal = Calendar.getInstance()
             minute = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
             ambience.weather = MapAmbience.weatherFor(scene.course, cal.get(Calendar.DAY_OF_YEAR), minute)
+            weatherNow = ambience.weather
         }
+        // lit windows and lamps after dark
+        drawGlows(canvas, now)
 
         val wd = wanderer
         drawOrder.clear()
+        pokemonFigure?.painted = false
+        buddyFigure?.painted = false
+        for (f in people.values) f.painted = false
         if (wd != null) {
             wd.update(now)
             val pose = wd.pose(now)
@@ -243,12 +363,20 @@ class RouteMap internal constructor(
                 drawOrder.add(f)
             }
             scene.project(pose.x, pose.y, pose.z)?.let { lightX = it[0]; lightY = it[1] - 10f }
-            // stepping into tall grass shakes it; into the water, a splash; a Fire type leaves sparks
+            // stepping into tall grass shakes it; into the water, a splash; sand and snow keep its footprints
             val at = wd.at
-            if (at !== lastTile) {
-                if (lastTile != null) scene.project(at.x, at.y, at.z)?.let {
-                    if (pose.inWater && !lastTile!!.let { l -> scene.water.containsKey(FieldMap.Scene.key(l.gx, l.gy)) && scene.tile(l.gx, l.gy) == null }) ambience.splash(it[0], it[1], now)
-                    else if (at.tallGrass) ambience.rustle(it[0], it[1], now)
+            val was = lastTile
+            if (at !== was) {
+                if (was != null) {
+                    val wet = scene.tile(at.gx, at.gy) == null
+                    val wasWet = scene.tile(was.gx, was.gy) == null
+                    when {
+                        wet && !wasWet -> splash(at, now)
+                        wet -> effects.ripple(at.x, at.y, at.z, now)
+                        wasWet -> splash(at, now)
+                        at.tallGrass -> scene.project(at.x, at.y, at.z)?.let { ambience.rustle(it[0], it[1], now) }
+                        else -> effects.stepped(at, wd.facing, now)
+                    }
                 }
                 lastTile = at
             }
@@ -260,33 +388,51 @@ class RouteMap internal constructor(
         // the one following along
         val bd = buddy
         if (bd != null && wd != null) {
-            bd.update(now, wd) { gx, gy -> crowd.occupied(gx, gy) || (berryTile != null && berryTile.gx == gx && berryTile.gy == gy) }
+            bd.update(now, wd) { gx, gy -> taken(gx, gy) }
             buddyFigure?.let { f ->
                 val pose = bd.pose(now)
                 f.pose = pose
                 f.feetY = scene.project(pose.x, pose.y, pose.z)?.get(1) ?: 0f
                 drawOrder.add(f)
                 if (bd.at !== f.lastTile) {
-                    if (f.lastTile != null && bd.at.tallGrass) scene.project(bd.at.x, bd.at.y, bd.at.z)?.let { ambience.rustle(it[0], it[1], now) }
+                    if (f.lastTile != null) stepped(bd.at, bd.facing, now)
                     f.lastTile = bd.at
                 }
             }
         }
-        // the people and wild Pokémon
-        val others = ArrayList<FieldMap.Tile>(3)
+        // the people and wild Pokémon, the games, and life about the place
+        val others = ArrayList<FieldMap.Tile>(4)
         bd?.let { others.add(it.at); it.next?.let { n -> others.add(n) } }
         berryTile?.let { others.add(it) }
+        life?.let { others.addAll(it.tiles()) }
         crowd.update(now, wd?.at, wd?.next, wd?.facing ?: 0, wd != null && wd.next == null, others)
         games?.update(now)
-        for ((t, out) in crowd.popped) {
-            val p = scene.project(t.x, t.y, t.z) ?: continue
+        val l = life
+        l?.update(now, minute, weatherNow)
+        if (l != null && l.lines.isNotEmpty()) {
+            for (line in l.lines) games?.announce(line, now)
+            l.lines.clear()
+        }
+        for ((t, _) in crowd.popped) {
             when {
-                scene.tile(t.gx, t.gy) == null -> ambience.splash(p[0], p[1], now)
-                t.tallGrass -> ambience.rustle(p[0], p[1], now)
-                else -> ambience.puff(p[0], p[1], now)
+                scene.tile(t.gx, t.gy) == null -> splash(t, now)
+                t.tallGrass -> scene.project(t.x, t.y, t.z)?.let { ambience.rustle(it[0], it[1], now) }
+                extras.art != null -> effects.dust(t.x, t.y, t.z, now)
+                else -> scene.project(t.x, t.y, t.z)?.let { ambience.puff(it[0], it[1], now) }
             }
         }
         crowd.popped.clear()
+        // a door it walks up to and looks at opens, and shuts again
+        if (pr != null && wd != null && l != null) {
+            val door = if (wd.idle && wd.facing == FollowerSprites.UP && !l.asleep) {
+                scene.doors.firstOrNull { it.first.gx == wd.at.gx && it.first.gy == wd.at.gy - 1 }
+            } else null
+            if (door != null && door !== doorOpened) {
+                pr.open(door.second, now * 30 / 1000)
+                l.atDoor(now)
+            }
+            doorOpened = door
+        }
         people.keys.retainAll(crowd.walkers.toSet())
         for (wk in crowd.walkers) {
             val sp = peopleSprites[wk.person.model] ?: continue
@@ -296,7 +442,7 @@ class RouteMap internal constructor(
             f.feetY = scene.project(pose.x, pose.y, pose.z)?.get(1) ?: continue
             drawOrder.add(f)
             if (wk.at !== f.lastTile) {
-                if (f.lastTile != null && wk.at.tallGrass) scene.project(wk.at.x, wk.at.y, wk.at.z)?.let { ambience.rustle(it[0], it[1], now) }
+                if (f.lastTile != null && !wk.person.swimming) stepped(wk.at, wk.facing, now)
                 f.lastTile = wk.at
             }
         }
@@ -310,35 +456,72 @@ class RouteMap internal constructor(
             f.feetY = scene.project(b.x, b.y, b.z)?.get(1) ?: 0f
             drawOrder.add(f)
         }
-        // a fish leaping out
-        g?.leap?.let { l ->
-            val sp = peopleSprites[l.model]
-            if (sp != null) {
-                val f = leapFigures.getOrPut(l.model) { figure(sp, shadow = false) }
-                val u = ((now - l.start).toDouble() / MapGames.LEAP_MS).coerceIn(0.0, 1.0)
-                f.pose = MapWanderer.Pose(l.tile.x, l.tile.y, l.tile.z, FollowerSprites.DOWN, ((now / 120) % 2).toInt(),
-                    kotlin.math.sin(Math.PI * u) * 34.0, false, inWater = u < 0.12 || u > 0.88, aloft = u in 0.12..0.88)
-                f.feetY = Float.MAX_VALUE
-                drawOrder.add(f)
-                if (now - l.start < 40) scene.project(l.tile.x, l.tile.y, l.tile.z)?.let { ambience.splash(it[0], it[1], now) }
+        // a fish leaping out (one caught, or a Magikarp jumping)
+        g?.leap?.let { leap ->
+            if (leap !== lastGameLeap) {
+                lastGameLeap = leap
+                splash(leap.tile, now)
             }
+            addLeap(leap, now)
+        }
+        l?.leap?.let { addLeap(it, now) }
+        // an item ball on the ground
+        val ball = l?.ball
+        if (ball != null && ballFigure != null) {
+            ballFigure.pose = MapWanderer.Pose(ball.tile.x, ball.tile.y, ball.tile.z, 0, 0, 0.0, false)
+            ballFigure.feetY = scene.project(ball.tile.x, ball.tile.y, ball.tile.z)?.get(1) ?: 0f
+            drawOrder.add(ballFigure)
+        }
+        // a berry thrown, on the ground (being eaten: gone before the last bites)
+        val treat = l?.treat
+        if (treat != null && now >= treat.landsAt && (treat.eatenAt == Long.MIN_VALUE || now - treat.eatenAt < MapLife.EAT_MS * 7 / 10)) {
+            val f = treatFigures.getOrPut(treat.kind) { figure(BerryArt.treat(treat.kind)) }
+            f.pose = MapWanderer.Pose(treat.tile.x, treat.tile.y, treat.tile.z, 0, 0, 0.0, false)
+            f.feetY = scene.project(treat.tile.x, treat.tile.y, treat.tile.z)?.get(1) ?: 0f
+            drawOrder.add(f)
+        }
+        // birds flying over, on top of everything
+        if (l != null) for (fl in l.flyers) {
+            val sp = peopleSprites[fl.kind.model] ?: continue
+            val pose = fl.pose(now) ?: continue
+            val f = flyerFigures.getOrPut(fl.kind.model) { figure(sp) }
+            f.pose = pose
+            f.feetY = Float.MAX_VALUE
+            drawOrder.add(f)
         }
 
+        // footprints and rings under everyone
+        effects.ground(now, groundDraws)
+        drawEffects(canvas, groundDraws)
         // further back first, so whoever is nearer is drawn over them
         drawOrder.sortBy { it.feetY }
         for (f in drawOrder) {
             val p = f.painter
             val pose = f.pose ?: continue
-            if (p.paint(pose)) {
+            f.painted = p.paint(pose)
+            if (f.painted) {
                 f.bitmap.setPixels(p.buffer, 0, p.bufferWidth, 0, 0, p.bufferWidth, p.bufferHeight)
                 canvas.drawBitmap(f.bitmap, p.left.toFloat(), p.top.toFloat(), paint)
             }
         }
+        // splashes, dust and sparkles over them
+        effects.air(now, airDraws)
+        drawEffects(canvas, airDraws)
+        // a berry in the air
+        if (treat != null && now < treat.landsAt) {
+            scene.project(treat.tile.x, treat.tile.y, treat.tile.z)?.let { end ->
+                val u = ((now - treat.thrownAt).toFloat() / MapLife.TOSS_MS).coerceIn(0f, 1f)
+                val x = treat.fromX + (end[0] - treat.fromX) * u
+                val y = treat.fromY + (end[1] - treat.fromY) * u - sin(Math.PI * u).toFloat() * 46f
+                val b = treatBitmap(treat.kind)
+                canvas.drawBitmap(b, (x - b.width / 2f).roundToInt().toFloat(), (y - b.height + 3f).roundToInt().toFloat(), paint)
+            }
+        }
 
-        // fishing: the line and the float, and "!" when something bites
+        // fishing: the line and the float (and "!" when something bites)
         if (g != null && wd != null) {
             g.bobber?.let { b -> scene.project(b.x, b.y, b.z) }?.let { bp ->
-                val bob = if (g.biting) 1.5f + kotlin.math.sin(now / 60.0).toFloat() * 1.2f else kotlin.math.sin(now / 400.0).toFloat() * 0.6f
+                val bob = if (g.biting) 1.5f + sin(now / 60.0).toFloat() * 1.2f else sin(now / 400.0).toFloat() * 0.6f
                 val pp = painter
                 if (pp != null) {
                     val rx = if (wd.facing == FollowerSprites.LEFT) pp.spriteLeft + 8f else if (wd.facing == FollowerSprites.RIGHT) pp.spriteLeft + pp.size - 8f else pp.spriteLeft + pp.size / 2f
@@ -350,7 +533,7 @@ class RouteMap internal constructor(
                 canvas.drawRect(bp[0] - 1.5f, bp[1] - 1.5f + bob, bp[0] + 1.5f, bp[1] + 0.5f + bob, dotPaint)
             }
             val pp = painter
-            if (g.biting && pp != null) bubble(canvas, pp.spriteLeft + pp.size / 2f, (pp.spriteTop + pp.headSpace).toFloat() - 3f)
+            if (g.biting && pp != null && extras.art == null) bubble(canvas, pp.spriteLeft + pp.size / 2f, (pp.spriteTop + pp.headSpace).toFloat() - 3f)
         }
 
         ambience.frame(now, minute, dots, clouds)
@@ -376,10 +559,89 @@ class RouteMap internal constructor(
                 floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
             canvas.drawRect(0f, 0f, scene.width.toFloat(), scene.height.toFloat(), darkPaint)
         }
+        // emote bubbles, over it all
+        if (l != null) {
+            for ((wk, f) in people) if (f.painted) drawEmote(canvas, wk, f.painter, now)
+            if (bd != null) buddyFigure?.takeIf { it.painted }?.let { drawEmote(canvas, bd, it.painter, now) }
+            if (wd != null) pokemonFigure?.takeIf { it.painted }?.let { drawEmote(canvas, wd, it.painter, now) }
+        }
         canvas.restore()
     }
 
-    /** A little "!" speech bubble with its point at ([x], [y]). */
+    /** Someone stepped onto [t]: footprints in sand and snow, a splash in a puddle, grass shaken up. */
+    private fun stepped(t: FieldMap.Tile, facing: Int, now: Long) {
+        if (t.tallGrass) scene.project(t.x, t.y, t.z)?.let { ambience.rustle(it[0], it[1], now) } else effects.stepped(t, facing, now)
+    }
+
+    /** A splash on the water at [t]: the game's, else our own. */
+    private fun splash(t: FieldMap.Tile, now: Long) {
+        if (extras.art != null) effects.splash(t.x, t.y, t.z, now)
+        else scene.project(t.x, t.y, t.z)?.let { ambience.splash(it[0], it[1], now) }
+    }
+
+    /** A fish leaping out of the water and back in, to draw. */
+    private fun addLeap(leap: MapGames.Leap, now: Long) {
+        val sp = peopleSprites[leap.model] ?: return
+        val f = leapFigures.getOrPut(leap.model) { figure(sp, shadow = false) }
+        val u = ((now - leap.start).toDouble() / MapGames.LEAP_MS).coerceIn(0.0, 1.0)
+        f.pose = MapWanderer.Pose(leap.tile.x, leap.tile.y, leap.tile.z, FollowerSprites.DOWN, ((now / 120) % 2).toInt(),
+            sin(Math.PI * u) * 34.0, false, inWater = u < 0.12 || u > 0.88, aloft = u in 0.12..0.88)
+        f.feetY = Float.MAX_VALUE
+        drawOrder.add(f)
+    }
+
+    private fun drawEffects(canvas: Canvas, list: List<FieldEffects.Draw>) {
+        for (d in list) {
+            effectPaint.alpha = (d.alpha * 255).toInt().coerceIn(0, 255)
+            effectRect.set(d.left, d.top, d.left + d.width, d.top + d.height)
+            canvas.drawBitmap(bitmapOf(d.image), null, effectRect, effectPaint)
+        }
+    }
+
+    /** Warm glows round the lit windows (steady) and lamps (flickering). */
+    private fun drawGlows(canvas: Canvas, now: Long) {
+        val g = scene.glows
+        var i = 0
+        var k = 0
+        while (i + 3 < g.size) {
+            val r = g[i + 2]
+            val lamp = g[i + 3] >= FieldMap.LAMP
+            val flicker = if (lamp) 0.8f + 0.12f * sin(now / 140.0 + k * 1.9).toFloat() + 0.08f * sin(now / 57.0 + k * 0.7).toFloat()
+                else 0.88f + 0.12f * sin(now / 1_300.0 + k * 2.3).toFloat()
+            glowPaint.alpha = ((if (lamp) 170 else 140) * flicker).toInt().coerceIn(0, 255)
+            glowRect.set(g[i] - r, g[i + 1] - r * 0.85f, g[i] + r, g[i + 1] + r * 0.85f)
+            canvas.drawBitmap(glowBitmap, null, glowRect, glowPaint)
+            i += 4
+            k++
+        }
+    }
+
+    /** [who]'s emote bubble over its sprite as [p] last painted it. */
+    private fun drawEmote(canvas: Canvas, who: Any, p: MapSpritePainter, now: Long) {
+        val b = life?.emotes?.at(who, now) ?: return
+        val frames = extras.art?.emote(b.emote) ?: emptyList()
+        val cx = p.spriteLeft + p.size / 2f
+        val head = (p.spriteTop + p.headSpace).toFloat()
+        if (frames.isEmpty()) {
+            if (b.emote == Emote.EXCLAIM) bubble(canvas, cx, head - 3f)
+            return
+        }
+        val age = now - b.start
+        val img = frames[Emotes.frame(age, frames.size)]
+        // a sleeper's "Zz" floats a little to the side
+        val left = (cx - img.width / 2f + if (b.emote == Emote.SLEEP) 6f else 0f).roundToInt()
+        var top = (head - 1f - img.bottom + Emotes.rise(age)).roundToInt()
+        if (top + img.top < 0) top = -img.top
+        canvas.drawBitmap(bitmapOf(img), left.toFloat(), top.toFloat(), paint)
+    }
+
+    private val treatBitmaps = HashMap<Int, Bitmap>()
+    private fun treatBitmap(kind: Int): Bitmap = treatBitmaps.getOrPut(kind) {
+        val sp = BerryArt.treat(kind)
+        Bitmap.createBitmap(sp.frames[0], sp.size, sp.size, Bitmap.Config.ARGB_8888)
+    }
+
+    /** A little "!" speech bubble with its point at ([x], [y]) (when the ROM's own bubbles can't be read). */
     private fun bubble(canvas: Canvas, x: Float, y: Float) {
         val left = x.roundToInt() - 4f
         val top = y.roundToInt() - 13f
@@ -406,6 +668,16 @@ class RouteMap internal constructor(
         /** A soft white bank of mist. */
         val mistBank: Bitmap by lazy { softBlob(0xFFF4F6F8.toInt(), 0xA0F0F4F8.toInt()) }
 
+        /** A warm soft glow, stretched over each lit window and lamp. */
+        val glowBitmap: Bitmap by lazy { softBlob(0xFFFFE6A8.toInt(), 0x90FFC060.toInt()) }
+
+        /** The game's effect pictures as bitmaps, made once each. */
+        private val bitmaps = IdentityHashMap<FieldEffectArt.Image, Bitmap>()
+
+        fun bitmapOf(img: FieldEffectArt.Image): Bitmap = synchronized(bitmaps) {
+            bitmaps.getOrPut(img) { Bitmap.createBitmap(img.pixels, img.width, img.height, Bitmap.Config.ARGB_8888) }
+        }
+
         private fun softBlob(inner: Int, mid: Int): Bitmap {
             val bmp = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
             val p = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -426,10 +698,13 @@ class RouteMap internal constructor(
         val wd = wanderer ?: return false
         val px = (x - offsetX) / scale
         val py = (y - offsetY) / scale
+        val l = life
         if (painter?.hit(px, py) == true && games?.game != MapGames.Game.FISHING) {
             wd.hop(now)
+            l?.patted(now)
             return true
         }
+        l?.interacted(now)
         val hit = people.values.filter { it.walker != null && it.painter.hit(px, py) }.maxByOrNull { it.feetY }?.walker
         val onBerry = berryTile?.let { b -> berryFigures.values.any { it.painter.hit(px, py) } && scene.project(b.x, b.y, b.z) != null } == true
         val ground = scene.tileNear(px, py, scene.tilePixels * 2f)
@@ -445,8 +720,24 @@ class RouteMap internal constructor(
             for (b in besides) if (wd.goTo(b, now, t)) return false
             return false
         }
+        // on the item ball: it goes and picks it up
+        if (l?.ball != null && ballFigure?.let { it.painted && it.painter.hit(px, py) } == true) {
+            l.fetchBall(now)
+            return false
+        }
+        // on a door: it goes up to it (and the door opens)
+        doorNear(px, py)?.let { door ->
+            scene.tile(door.gx, door.gy + 1)?.let { front -> if (wd.goTo(front, now, door)) return false }
+        }
         ground?.let { wd.goTo(it, now) }
         return false
+    }
+
+    /** The door drawn at picture position ([px], [py]), if any. */
+    private fun doorNear(px: Float, py: Float): FieldMap.Tile? = scene.doors.map { it.first }.firstOrNull { d ->
+        val front = scene.tile(d.gx, d.gy + 1)
+        val p = if (front == null) null else scene.project(d.x, front.y, d.z)
+        p != null && px in p[0] - 10f..p[0] + 10f && py in p[1] - 28f..p[1] + 6f
     }
 
     /** The water tile drawn nearest to picture position ([px], [py]), within a tile and a half. */
@@ -465,11 +756,13 @@ class RouteMap internal constructor(
     fun action(now: Long): Boolean {
         if (games?.action(now) == true) return false
         wanderer?.hop(now)
+        life?.patted(now)
         return true
     }
 
     /** Walks the Pokémon about by hand (D-pad): see [MapWanderer.walk]. */
     fun walk(direction: Int, held: Boolean, now: Long) {
+        life?.interacted(now)
         if (games?.game == MapGames.Game.FISHING) games.stop(now)
         wanderer?.walk(direction, held, now)
     }
@@ -500,6 +793,7 @@ class RouteMap internal constructor(
             }
         }
         wanderer?.avoid = hidden
+        life?.hidden = hidden
         crowd.spawnOk = hidden?.let { h -> { t: FieldMap.Tile -> !h(t) } }
     }
 }
@@ -510,13 +804,6 @@ class RouteMap internal constructor(
  * screen size or the Pokémon change. When the ROM can't be read (never started, moved, zipped)
  * there's no map and the painted landscape stays.
  */
-/** Who's on the walk: the walking Pokémon, the course's Pokémon and the ones caught so far (from the walker's memory). */
-data class WalkParty(val walking: WalkingPokemon?, val route: List<WalkingPokemon> = emptyList(), val caught: List<WalkingPokemon> = emptyList()) {
-    companion object {
-        fun fromImage(image: ByteArray?) = WalkParty(WalkingPokemon.fromImage(image), WalkingPokemon.routePokemon(image), WalkingPokemon.caught(image))
-    }
-}
-
 object RouteMaps {
     private const val TAG = "RouteMaps"
     private const val PREFS = "pokewalker_route_map"
@@ -545,6 +832,8 @@ object RouteMaps {
     }
 
     private var cached: RouteMap? = null
+    /** The game's field effects, read once for the ROM they're from. */
+    @Volatile private var art: Pair<String, FieldEffectArt?>? = null
     @Volatile private var failedRom: String? = null
     @Volatile private var failedKey: String? = null
     /** Until when not to try [failedKey] again (elapsed realtime; Long.MAX_VALUE: not this session). */
@@ -572,7 +861,7 @@ object RouteMaps {
         return "$uri|${course.name}|${size[0]}x${size[1]}x${size[2]}"
     }
 
-    private fun lightOk(m: RouteMap) = m.scene.lightKey < 0 || m.scene.lightKey == FieldMap.lightIndex(minuteNow())
+    private fun lightOk(m: RouteMap) = m.scene.lightKey < 0 || m.scene.lightKey == FieldMap.dayKey(minuteNow())
 
     /**
      * The map for the walk on [routeName] in a [w] x [h] view, made (in the background) only when
@@ -651,16 +940,26 @@ object RouteMaps {
                     } else IntArray(0)
                     val buddy = party.caught.firstOrNull()
                     val buddySprite = buddy?.let { b -> runCatching { FollowerSprites.load(src, b.species, b.form, b.female, b.shiny) }.getOrNull() }
+                    // birds flying over outside (owls at night), and a Magikarp in the water
+                    val birds = if (!scene.outdoor) emptyList() else (if (scene.timeOfDay == 3) MapLife.NIGHT_BIRDS else MapLife.DAY_BIRDS)
+                        .toList().mapNotNull { kind(WalkingPokemon(it, 0, false, false), false) }
+                    val magikarp = if (scene.water.size >= 6 && course.kind != FieldMap.Kind.ICE && course.kind != FieldMap.Kind.VOLCANO) {
+                        kind(WalkingPokemon(MapLife.MAGIKARP, 0, false, false), true)
+                    } else null
+                    val effectArt = artFor(uri, src)
                     val extras = MapExtras(
                         types = pokemon?.let { types(it.species) } ?: emptySet(),
                         buddy = buddy, buddySprite = buddySprite,
                         wild = wild, fish = fish, bugs = bugs, unown = unown,
                         berryStore = if (scene.outdoor) PrefsBerryStore(context, course.name) else null,
+                        art = effectArt, items = party.items.toIntArray(), birds = birds, magikarp = magikarp,
                     )
                     if (sameScene == null) {
                         PokewalkerNative.note("Route map: ${course.place} from $game for ${course.name}, " +
                             "${scene.tiles.size} tiles to explore, ${scene.people.count { it.model in peopleSprites }} people, " +
-                            "${wild.size} wild Pokémon (${(System.nanoTime() - t0) / 1_000_000} ms)")
+                            "${wild.size} wild Pokémon, ${scene.props?.props?.size ?: 0} moving buildings (${scene.doors.size} doors), " +
+                            "${scene.glows.size / 4} lights, ${if (effectArt != null) "the game's effects" else "no effects"} " +
+                            "(${(System.nanoTime() - t0) / 1_000_000} ms)")
                     }
                     RouteMap(scene, sprite, game, size[2], key, pokemon, previous, peopleSprites, extras, party)
                 }
@@ -686,6 +985,13 @@ object RouteMaps {
             Log.w(TAG, "Not enough memory for the route map", e)
             null
         }
+    }
+
+    private fun artFor(uri: String, src: CryArchive.Source): FieldEffectArt? {
+        art?.let { if (it.first == uri) return it.second }
+        val a = runCatching { FieldEffectArt.load(src) }.getOrNull()
+        art = uri to a
+        return a
     }
 
     private fun fail(key: String, until: Long) {

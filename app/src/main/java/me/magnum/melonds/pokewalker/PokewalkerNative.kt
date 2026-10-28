@@ -21,6 +21,9 @@ object PokewalkerNative {
     /** A Pokémon's English name by its National Dex number ("" when out of range). */
     external fun speciesName(species: Int): String
 
+    /** An item's English name by its item number ("" when out of range). */
+    external fun itemName(item: Int): String
+
     /** Adds steps walked [daysAgo] days ago (0 = today). Returns null on success, otherwise an error message. */
     external fun addSteps(steps: Int, daysAgo: Int): String?
 

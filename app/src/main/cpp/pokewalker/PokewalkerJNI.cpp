@@ -59,6 +59,13 @@ Java_me_magnum_melonds_pokewalker_PokewalkerNative_speciesName(JNIEnv* env, jobj
 }
 
 JNIEXPORT jstring JNICALL
+Java_me_magnum_melonds_pokewalker_PokewalkerNative_itemName(JNIEnv* env, jobject, jint item)
+{
+    const char* name = item > 0 && item < 0x10000 ? pokewalker::ItemName(static_cast<pokewalker::u16>(item)) : "";
+    return env->NewStringUTF(name ? name : "");
+}
+
+JNIEXPORT jstring JNICALL
 Java_me_magnum_melonds_pokewalker_PokewalkerNative_getStatusJson(JNIEnv* env, jobject)
 {
     std::string json = pokewalker::ir::StatusJson();

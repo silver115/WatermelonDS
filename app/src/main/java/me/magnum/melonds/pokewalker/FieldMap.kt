@@ -311,8 +311,14 @@ object FieldMap {
     /** Light type 1 (and unknown ones) follows the time of day (AreaDataManager_GetAreaLightArchiveID). */
     fun followsTheDay(lightType: Int) = lightType != 0 && lightType != 2
 
-    /** Which of the day's lights a picture drawn at [minute] has, or -1 when the area's light never changes. */
-    fun lightKey(minute: Int, lightType: Int) = if (followsTheDay(lightType)) lightIndex(minute) else -1
+    /**
+     * Which of the day's looks a picture drawn at [minute] has: its light and the game's time of
+     * day (buildings' animations, lit windows), or -1 when the area's light never changes.
+     */
+    fun lightKey(minute: Int, lightType: Int) = if (followsTheDay(lightType)) dayKey(minute) else -1
+
+    /** The day's light and time of day at [minute], as one number ([lightKey]). */
+    fun dayKey(minute: Int) = lightIndex(minute) * 4 + PropAnimations.timeOfDay(minute)
 
     fun lighting(minute: Int, lightType: Int): Nitro.Lighting = when (lightType) {
         0 -> lighting(INSIDE_LIGHT, 110)
@@ -408,6 +414,16 @@ object FieldMap {
         val ledges: Map<Long, Int> = emptyMap(),
         /** Signs and other things to read in sight (tiles you face to read them), with ground beside them. */
         val signs: List<Tile> = emptyList(),
+        /** Buildings whose shape moves (windmills, doors), drawn over [image] ([SceneProps.overlay]). */
+        val props: SceneProps? = null,
+        /** Doors in sight (their tiles) and the building that opens there. */
+        val doors: List<Pair<Tile, SceneProps.Prop>> = emptyList(),
+        /** The game's time of day it was drawn for ([PropAnimations.timeOfDay]). */
+        val timeOfDay: Int = 1,
+        /** Lit windows and lamps in sight after dark: picture x, y, radius and kind (1 a window, 2 a lamp) of each glow. */
+        val glows: FloatArray = FloatArray(0),
+        /** Where the maps have item balls, on ground in sight. */
+        val itemSpots: List<Tile> = emptyList(),
     ) {
         fun tile(gx: Int, gy: Int): Tile? = tiles[key(gx, gy)]
 
@@ -607,6 +623,25 @@ object FieldMap {
         val slotCache = HashMap<List<Any?>, SceneAnimation.Slot>()
         val layers = ArrayList<Pair<Nitro.Batch, SceneAnimation.Slot>>()
 
+        // the buildings' own animations: always on, by the time of day, or played (doors)
+        val propLists = Nitro.narc(src, PropAnimations.OUTDOOR_LISTS)
+        val propListsInside = Nitro.narc(src, PropAnimations.INDOOR_LISTS)
+        val propFiles = Nitro.narc(src, PropAnimations.FILES)
+        val propFileCache = HashMap<Int, ByteArray?>()
+        fun propFile(id: Int) = propFileCache.getOrPut(id) {
+            if (propFiles == null || id < 0 || id >= propFiles.count) null else runCatching { propFiles.read(id) }.getOrNull()
+        }
+        val timeOfDay = PropAnimations.timeOfDay(minute)
+        val outside = followsTheDay(lightType)
+        val lampsOn = outside && timeOfDay >= 2
+        val windowsLit = outside && timeOfDay == 3
+        val glowWorld = ArrayList<DoubleArray>()
+        val litNames = LinkedHashSet<String>()
+        class Moving(val model: Nitro.Model, val place: DoubleArray, val sets: List<Nitro.TexSet>, val loop: PropAnimations.Joint?,
+                     val opening: PropAnimations.Joint?, val closing: PropAnimations.Joint?, val gx: Int, val gy: Int)
+        val moving = ArrayList<Moving>()
+        var animatedBuildings = 0
+
         val batches = ArrayList<Nitro.Batch>()
         val terrain = ArrayList<Pair<IntArray, List<Nitro.Batch>>>() // block -> its terrain triangles, for ground heights
         for (by in by0..by1) for (bx in bx0..bx1) {
@@ -655,9 +690,64 @@ object FieldMap {
                 val place = Mat4.mul(Mat4.translate(cxw + bd.x, bd.y, czw + bd.z), Mat4.scale(bd.sx, bd.sy, bd.sz))
                 // the area's building textures are what the game binds to the model
                 val sets = listOfNotNull(bldTex, c.texSet)
+                val entry = (if (bnarc === outdoorNarc) propLists else propListsInside)?.let { PropAnimations.entry(it, bd.model) }
+                var joint: PropAnimations.Joint? = null
+                var loopJoint: PropAnimations.Joint? = null
+                var textures: Map<String, Pair<String, String?>>? = null
+                val bScrolls = HashMap<String, FieldAnimations.Scroll>()
+                val bSwaps = HashMap<String, FieldAnimations.Swap>()
+                var door: Pair<PropAnimations.Joint, PropAnimations.Joint?>? = null
+                if (entry != null) {
+                    animatedBuildings++
+                    val ids = when {
+                        entry.timeOfDay -> listOf(entry.ids.getOrElse(timeOfDay) { entry.ids.last() })
+                        entry.loops -> entry.ids.toList()
+                        else -> emptyList()
+                    }
+                    for (id in ids) {
+                        val f = propFile(id) ?: continue
+                        when (String(f, 0, 4, Charsets.ISO_8859_1)) {
+                            "BCA0" -> PropAnimations.parseJoint(f)?.let { j -> if (entry.loops && j.frames > 1) { loopJoint = j } else { joint = j } }
+                            "BTP0" -> PropAnimations.parsePattern(f)?.let { pat ->
+                                if (entry.loops && pat.frames > 1) { patternSwaps(pat, sets, bSwaps) } else { textures = pat.at(0) }
+                            }
+                            "BTA0" -> bScrolls.putAll(runCatching { FieldAnimations.parseScrolls(f) }.getOrDefault(emptyMap()))
+                        }
+                    }
+                    if (entry.oneShot && entry.ids.size >= 2) {
+                        val o = propFile(entry.ids[0])?.let { PropAnimations.parseJoint(it) }
+                        val cl = propFile(entry.ids[1])?.let { PropAnimations.parseJoint(it) }
+                        if (o != null) door = o to cl
+                    }
+                }
+                val m0 = c.models.firstOrNull()
+                if (m0 != null && (loopJoint != null || door != null)) {
+                    // its shape moves: drawn over the picture as it goes (see SceneProps)
+                    moving.add(Moving(m0, place, sets, loopJoint, door?.first, door?.second,
+                        floor((cxw + bd.x) / TILE).toInt(), floor((czw + bd.z) / TILE).toInt()))
+                    continue
+                }
                 val own = ArrayList<Nitro.Batch>()
-                for (m in c.models) Nitro.buildMesh(m, place, sets, light, own)
-                if (!floatingLayer(own, bd.y)) batches.addAll(own)
+                for (m in c.models) Nitro.buildMesh(m, place, sets, light, own, joint?.nodes(0, m.nodes), textures)
+                if (floatingLayer(own, bd.y) && bScrolls.isEmpty()) continue
+                // after dark the windows and lamps are lit
+                if (lampsOn) for (b in own) {
+                    val kind = lightKind(b.materialName, b.textureName)
+                    if (kind == 0 || (kind == WINDOW && !windowsLit)) continue
+                    lightUp(b, if (kind == WINDOW) WINDOW_LIGHT else LAMP_LIGHT, kind, glowWorld)
+                    if (litNames.size < 12) litNames.add(b.materialName ?: b.textureName ?: "?")
+                }
+                for (b in own) {
+                    val img = b.image
+                    val swap = b.materialName?.let { bSwaps[it] }?.takeIf { img != null && it.width == img.width && it.height == img.height }
+                    val scroll = b.materialName?.let { bScrolls[it] }
+                    if (img == null || (swap == null && scroll == null)) { batches.add(b); continue }
+                    val blend = b.alpha in 1..30 || img.translucent
+                    val slot = slotCache.getOrPut(listOf(img, swap, scroll, b.alpha, b.mode, blend)) {
+                        SceneAnimation.Slot(img, swap, scroll, if (b.alpha == 0) 1f else b.alpha / 31f, b.mode == 1, blend)
+                    }
+                    layers.add(b to slot)
+                }
             }
         }
         if (batches.isEmpty()) throw MapException("nothing to draw for ${course.place}")
@@ -691,6 +781,29 @@ object FieldMap {
         r.viewProj = viewProj
         r.draw(batches)
         val animation = runCatching { SceneAnimation.capture(r, layers) }.getOrNull()
+
+        // buildings whose shape moves: what they hide at rest, then drawn over the picture as they go
+        var props: SceneProps? = null
+        if (moving.isNotEmpty()) {
+            val baseDepth = r.depth.copyOf()
+            val baseColor = r.color.copyOf()
+            val list = ArrayList<SceneProps.Prop>()
+            val rest = ArrayList<Nitro.Batch>()
+            for (mv in moving) {
+                val frames = ArrayList<Nitro.Batch>()
+                val anim = mv.loop ?: mv.opening
+                val samples = if (anim == null) listOf(0) else (0 until 8).map { it * (anim.frames - 1) / 7 }
+                for (f in samples) Nitro.buildMesh(mv.model, mv.place, mv.sets, light, frames, anim?.nodes(f, mv.model.nodes))
+                mv.closing?.let { cl -> for (f in listOf(0, cl.frames / 2, cl.frames - 1)) Nitro.buildMesh(mv.model, mv.place, mv.sets, light, frames, cl.nodes(f, mv.model.nodes)) }
+                val box = SceneProps.Boxes.of(frames, { x, y, z -> r.project(x, y, z) }, width, height, 2)
+                Nitro.buildMesh(mv.model, mv.place, mv.sets, light, rest, anim?.nodes(0, mv.model.nodes))
+                list.add(SceneProps.Prop(mv.model, mv.place, mv.sets, light, mv.loop, mv.opening, mv.closing, box))
+            }
+            r.draw(rest)
+            System.arraycopy(baseColor, 0, r.color, 0, baseColor.size)
+            props = SceneProps(width, height, viewProj, baseDepth, list).also { it.update(0, r.color) }
+        }
+        log("$animatedBuildings buildings with animations, ${moving.size} moving (${moving.count { it.opening != null }} doors)")
 
         // tiles the Pokémon can walk on and that are in sight, with room for it to be drawn
         val tiles = HashMap<Long, Tile>()
@@ -738,6 +851,31 @@ object FieldMap {
         log("${tiles.size} tiles in sight to walk on, starting at ${start?.let { "${it.gx},${it.gy}" }}")
         log("${animation?.size ?: 0} moving pixels, ${water.size / 2} water tiles in sight")
 
+        // the lit windows and lamps that can be seen (one glow where a lamp's faces are close together)
+        val glows = ArrayList<Float>()
+        for (g in glowWorld) {
+            val pr = r.project(g[0], g[1], g[2]) ?: continue
+            if (pr[0] < 0f || pr[0] >= width || pr[1] < 0f || pr[1] >= height) continue
+            val d = r.depth[pr[1].toInt() * width + pr[0].toInt()]
+            if (d > pr[2] * 1.02f) continue
+            val radius = g[3].toFloat()
+            var merged = false
+            var k = 0
+            while (k < glows.size) {
+                val dx = glows[k] - pr[0]
+                val dy = glows[k + 1] - pr[1]
+                if (dx * dx + dy * dy < (max(4f, radius * 0.4f)).let { it * it }) {
+                    glows[k + 2] = max(glows[k + 2], radius)
+                    merged = true
+                    break
+                }
+                k += 4
+            }
+            if (merged) continue
+            glows.add(pr[0]); glows.add(pr[1]); glows.add(radius); glows.add(g[4].toFloat())
+            if (glows.size >= 4 * 96) break
+        }
+
         // the people of the maps in sight
         val mapsInSight = LinkedHashSet<Int>()
         mapsInSight.add(course.map)
@@ -776,9 +914,95 @@ object FieldMap {
             val gh = groundY(gx, gy) ?: listOf(gx to gy + 1, gx - 1 to gy, gx + 1 to gy).firstNotNullOfOrNull { (x, y) -> tiles[Scene.key(x, y)]?.y } ?: return@mapNotNull null
             Tile(gx, gy, gx * TILE + TILE / 2, gh, gy * TILE + TILE / 2)
         }.distinctBy { Scene.key(it.gx, it.gy) }
-        log("${ledges.size} ledge tiles, ${signs.size} things to read")
+        // doors: the maps' warps beside a building whose door opens, with ground in front (south)
+        val doors = ArrayList<Pair<Tile, SceneProps.Prop>>()
+        val p0 = props
+        if (p0 != null) {
+            val warps = runCatching { FieldPeople.warps(src, mapsInSight) }.getOrDefault(emptyList())
+            for ((i, mv) in moving.withIndex()) {
+                if (mv.opening == null) continue
+                val prop = p0.props[i]
+                val w = warps.filter { (x, z) -> abs(x - mv.gx) <= 3 && z - mv.gy in -1..4 && Scene.key(x, z + 1) in tiles }
+                    .minByOrNull { (x, z) -> abs(x - mv.gx) + abs(z - mv.gy) } ?: continue
+                val front = tiles.getValue(Scene.key(w.first, w.second + 1))
+                doors.add(Tile(w.first, w.second, w.first * TILE + TILE / 2, front.y, w.second * TILE + TILE / 2) to prop)
+            }
+        }
+        // where the maps keep item balls (whether or not they've been picked up in the game)
+        val itemSpots = runCatching { FieldPeople.itemBalls(src, mapsInSight) }.getOrDefault(emptyList())
+            .mapNotNull { (x, z) -> tiles[Scene.key(x, z)] }.distinctBy { Scene.key(it.gx, it.gy) }
+        log("${ledges.size} ledge tiles, ${signs.size} things to read, ${doors.size} doors, ${glows.size / 4} lights ($litNames), ${itemSpots.size} item ball spots")
         return Scene(course, width, height, r.color, r.depth, viewProj, tiles, TILE.toFloat(), start, lightKey(minute, lightType),
-            animation, water.toFloatArray(), followsTheDay(lightType), waterTiles, people, ledges, signs)
+            animation, water.toFloatArray(), followsTheDay(lightType), waterTiles, people, ledges, signs, props, doors,
+            timeOfDay, glows.toFloatArray(), itemSpots)
+    }
+
+    const val WINDOW = 1
+    const val LAMP = 2
+    /** The colour a lit window or lamp shines with instead of the night's light. */
+    private val WINDOW_LIGHT = floatArrayOf(1.0f, 0.86f, 0.55f)
+    private val LAMP_LIGHT = floatArrayOf(1.0f, 0.94f, 0.72f)
+
+    /** Whether a material is a window (WINDOW, "mado" in the game's names), a lamp (LAMP) or neither (0). */
+    fun lightKind(material: String?, texture: String?): Int {
+        for (n in listOfNotNull(material?.lowercase(), texture?.lowercase())) {
+            if (n.contains("mado") || n.contains("_wd")) return WINDOW
+            if (n.contains("light") || n.contains("tourou") || n.contains("lamp") || n.contains("akari") || n.contains("hikari")) return LAMP
+        }
+        return 0
+    }
+
+    /** Lights [b] up with [rgb] (not the night's light), and notes where its glows are (world x, y, z, radius, [kind]). */
+    private fun lightUp(b: Nitro.Batch, rgb: FloatArray, kind: Int, glows: MutableList<DoubleArray>) {
+        val v = b.v
+        for (i in 0 until b.count) { v[i * 8 + 5] = rgb[0]; v[i * 8 + 6] = rgb[1]; v[i * 8 + 7] = rgb[2] }
+        // a glow for each quad (two triangles)
+        var t = 0
+        while (t < b.triangles && glows.size < 400) {
+            val n = if (t + 1 < b.triangles) 6 else 3
+            var x = 0.0; var y = 0.0; var z = 0.0
+            var minX = Double.MAX_VALUE; var maxX = -Double.MAX_VALUE; var minY = Double.MAX_VALUE; var maxY = -Double.MAX_VALUE
+            for (k in 0 until n) {
+                val o = (t * 3 + k) * 8
+                x += v[o]; y += v[o + 1]; z += v[o + 2]
+                minX = min(minX, v[o].toDouble()); maxX = max(maxX, v[o].toDouble())
+                minY = min(minY, v[o + 1].toDouble()); maxY = max(maxY, v[o + 1].toDouble())
+            }
+            val size = max(maxX - minX, maxY - minY)
+            if (size >= 2.0) glows.add(doubleArrayOf(x / n, y / n, z / n + 1.0, (size * 0.9 + 6.0).coerceAtMost(26.0), kind.toDouble()))
+            t += 2
+        }
+    }
+
+    /**
+     * A building's looping texture pattern as the texture swaps the picture plays: per material,
+     * each (texture, palette) it shows, and which one at each game frame.
+     */
+    private fun patternSwaps(pat: PropAnimations.Pattern, sets: List<Nitro.TexSet>, out: MutableMap<String, FieldAnimations.Swap>) {
+        for ((mat, keys) in pat.tracks) {
+            val combos = ArrayList<Pair<String, String?>>()
+            val frames = ArrayList<IntArray>()
+            var w = 0
+            var h = 0
+            val timeline = IntArray(pat.frames)
+            var k = 0
+            for (f in 0 until pat.frames) {
+                while (k + 3 < keys.size && keys[k + 3] <= f) k += 3
+                val combo = (pat.textures.getOrNull(keys[k + 1]) ?: return) to pat.palettes.getOrNull(keys[k + 2])
+                var idx = combos.indexOf(combo)
+                if (idx < 0) {
+                    val tex = sets.firstNotNullOfOrNull { it.textures[combo.first] } ?: return
+                    val pal = combo.second?.let { n -> sets.firstNotNullOfOrNull { it.palettes[n] } }
+                    val px = Nitro.decode(tex, pal) ?: return
+                    if (frames.isEmpty()) { w = tex.width; h = tex.height } else if (tex.width != w || tex.height != h) return
+                    combos.add(combo)
+                    frames.add(px)
+                    idx = combos.size - 1
+                }
+                timeline[f] = idx
+            }
+            if (frames.size > 1) out[mat] = FieldAnimations.Swap(mat, frames, w, h, timeline)
+        }
     }
 
     /** Whether two neighbouring tiles are a step apart (not a cliff). */

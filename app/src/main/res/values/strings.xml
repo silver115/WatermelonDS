@@ -678,8 +678,9 @@
     <string name="pokewalker_explore">Explore the route</string>
     <string name="pokewalker_explore_close">Back to the walker</string>
     <string name="pokewalker_explore_caption">%1$s · %2$s in %3$s</string>
-    <string name="pokewalker_explore_hint">Tap somewhere and %1$s walks over. Tap %1$s to say hi.</string>
-    <string name="pokewalker_explore_hint_people">Tap somewhere and %1$s walks over, or tap someone to go and meet them. Tap %1$s to say hi.</string>
+    <string name="pokewalker_explore_hint">Tap somewhere and %1$s walks over. Tap %1$s to say hi, or press and hold to toss a berry.</string>
+    <string name="pokewalker_explore_hint_people">Tap somewhere and %1$s walks over, or tap someone to meet them. Tap %1$s to say hi, or hold to toss a berry.</string>
+    <string name="pokewalker_explore_hint_asleep">%1$s is fast asleep. Tap it or start walking to wake it up.</string>
     <string name="pokewalker_explore_hint_no_sprite">%1$s is out exploring.</string>
     <string name="pokewalker_games">Games</string>
     <string name="pokewalker_game_fishing">Fishing</string>
@@ -688,6 +689,7 @@
     <string name="pokewalker_game_unown">Unown hunt</string>
     <string name="pokewalker_game_berry">Berry patch</string>
     <string name="pokewalker_game_stop">Stop the game</string>
+    <string name="pokewalker_toss_berry">Toss a berry</string>
     <string name="pokewalker_fish_walk">%1$s is off to the water to fish…</string>
     <string name="pokewalker_fish_wait">Waiting for a bite… Tap to reel in.</string>
     <string name="pokewalker_fish_bite">Something\'s biting! Tap now!</string>
@@ -709,6 +711,9 @@
     <string name="pokewalker_berry_growing">The %1$s Berry is growing: %2$d more steps to go.</string>
     <string name="pokewalker_berry_picked">Picked %2$d %1$s Berries!</string>
     <string name="pokewalker_berry_nowhere">%1$s can\'t get to the berry patch from here.</string>
+    <string name="pokewalker_item_found">%1$s found %2$s! (Just for fun: it isn\'t added to your bag.)</string>
+    <string name="pokewalker_treat_eaten">%1$s ate the %2$s Berry. Yum!</string>
+    <string name="pokewalker_treat_nowhere">%1$s can\'t get to the berry.</string>
     <string-array name="pokewalker_berries">
         <item>Oran</item>
         <item>Pecha</item>

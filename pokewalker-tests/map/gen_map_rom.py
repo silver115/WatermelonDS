@@ -23,7 +23,17 @@ The fake world:
     each, the tree's (251) seven; a sign on the front of the house (bg event at (47, 21));
   - a ledge across x 20-25 at row 20 of block 0 (in the tall grass), hopped down southwards;
   - types (`a/0/0/2`): Pidgey Normal/Flying, Pikachu Electric, Psyduck and Magikarp Water,
-    Gastly Ghost/Poison, Cyndaquil Fire, everyone else Normal.
+    Gastly Ghost/Poison, Cyndaquil Fire, everyone else Normal;
+  - the house has a window (material h_mado) and a lamp (ko_light) on its front, and by the
+    time of day its walls change texture (a BTP0 per time of day: red by day, yellow at night);
+    a door (model 5) on its front opens and shuts (BCA0s sliding it across) with a warp behind
+    it at (48, 21); a windmill's sails (model 4, a yellow bar) turn round (a looping BCA0 of
+    pivot rotations) over the box nobody loads (`a/1/0/6`, `a/1/0/7`);
+  - sand at x 4-5, y 15-18 and puddles at x 4-5, y 19-20 of block 0, and an item ball
+    (sprite 87) at (36, 11);
+  - the game's field effects (`a/1/0/3`): emote bubbles, splash, dust, ripples, sparkles,
+    footprints, each drawn here as plain marks, where the game has them, but the item ball,
+    which is further on (to be found by name).
 """
 import struct, sys
 
@@ -137,18 +147,30 @@ def vtx16(x, y, z, scale):
 def tc(s, t):
     return (int(s * 16) & 0xFFFF) | ((int(t * 16) & 0xFFFF) << 16)
 
-def quads(qs, scale, texels_per_unit=0.25):
-    """qs: list of four (x, y, z) corners each (counter-clockwise seen from the front)."""
+def normal10(n):
+    q = lambda v: int(round(max(-1.0, min(511 / 512, v)) * 512)) & 0x3FF
+    return q(n[0]) | (q(n[1]) << 10) | (q(n[2]) << 20)
+
+def quads(qs, scale, texels_per_unit=0.25, normals=False):
+    """qs: list of four (x, y, z) corners each (counter-clockwise seen from the front); with
+    [normals], each quad's facing (for the light)."""
     cmds = [(0x40, [1])]
     for q in qs:
+        if normals:
+            (ax, ay, az), (bx, by, bz), (cx, cy, cz) = q[0], q[1], q[2]
+            ux, uy, uz = bx - ax, by - ay, bz - az
+            vx, vy, vz = cx - ax, cy - ay, cz - az
+            nx, ny, nz = uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx
+            ln = (nx * nx + ny * ny + nz * nz) ** 0.5 or 1.0
+            cmds.append((0x21, [normal10((nx / ln, ny / ln, nz / ln))]))
         for (x, y, z) in q:
             cmds.append((0x22, [tc(x * texels_per_unit, z * texels_per_unit + y * texels_per_unit)]))
             cmds.append((0x23, vtx16(x, y, z, scale)))
     cmds.append((0x41, []))
     return gpu(cmds)
 
-def material(tex_w=8, tex_h=8, both_sides=False, color=0x7FFF):
-    poly = (31 << 16) | (1 << 7) | ((1 << 6) if both_sides else 0)
+def material(tex_w=8, tex_h=8, both_sides=False, color=0x7FFF, lights=0):
+    poly = (31 << 16) | (1 << 7) | ((1 << 6) if both_sides else 0) | lights
     m = bytearray(0x2C)
     m[0:2] = u16(0)
     m[2:4] = u16(0x2C)
@@ -194,7 +216,7 @@ def mdl0_parts(name, parts, scale):
     mats += dict_block([(t, u16(lists_off + i) + u8(1) + u8(0)) for t, i in pals], 4)
     mats += lists
     assert len(mats) == mat_off
-    for p in parts: mats += material(both_sides=p[4], color=p[5])
+    for p in parts: mats += material(both_sides=p[4], color=p[5], lights=p[6] if len(p) > 6 else 0)
     # shapes
     shp_head = dict_size(n, 4)
     offs, body_s = [], b''
@@ -383,6 +405,10 @@ def perms_block0():
     for y in range(12, 14):
         for x in range(9, 11): put(x, y, 0, 0x80)                # the box nobody loads
     for x in range(20, 26): put(x, 20, 0x3B)                     # a ledge to hop down (south)
+    for y in range(15, 19):
+        for x in range(4, 6): put(x, y, 0x21)                    # sand
+    for y in range(19, 21):
+        for x in range(4, 6): put(x, y, 0x16)                    # puddles
     return perms
 
 def perms_cave():
@@ -422,6 +448,7 @@ def follower_btx():
 
 # sprite numbers (the game's sprite table) of the people's overworld sprites
 SPRITE_WOMAN, SPRITE_MAN, SPRITE_SWIMMER, SPRITE_TREE = 0x145, 0x14C, 0x156, 0x106   # mmodel 123, 130, 138, 251
+SPRITE_ITEM_BALL = 87
 ROUTE29_EVENTS = 30
 
 def person_btx(name, colour):
@@ -445,13 +472,148 @@ def static_btx(name, count):
     textures = [('%s.%d' % (name, n + 1), 32, 32, 3, b'\x11' * 512, True) for n in range(count)]
     return nitro_file(b'BTX0', [tex0(textures, [(name, [0, rgb(200, 120, 40)] + [0] * 14)])])
 
-def event_file(objects, bgs=()):
+def event_file(objects, bgs=(), warps=()):
     """files/fielddata/eventdata/zone_event.json.txt: bg events (type, x, z), then the objects
-    (sprite, movement, type, flag, facing, x range, y range, x, z), no warps or coordinate triggers."""
+    (sprite, movement, type, flag, facing, x range, y range, x, z), the warps (x, z), no coordinate triggers."""
     out = u32(len(bgs)) + b''.join(u16(0) + u16(kind) + s32(x) + s32(z) + s32(0) + s32(0) for kind, x, z in bgs) + u32(len(objects))
     for i, (sprite, movement, kind, flag, facing, xr, yr, x, z) in enumerate(objects):
         out += b''.join(u16(v) for v in (i, sprite, movement, kind, flag, 0, facing, 0, 0, 0, xr, yr, x, z)) + u32(0)
-    return out + u32(0) + u32(0)
+    out += u32(len(warps)) + b''.join(u16(x) + u16(z) + u16(0) + u16(0) + u32(0) for x, z in warps)
+    return out + u32(0)
+
+# ---- building animations, field effects --------------------------------------------------
+
+def jnt_anim(frames, objects, pivots):
+    """A BCA0 (one JNT0 animation): objects are (flags, data words) with curve offsets as
+    ('curve', bytes) placeholders laid out after them; pivots: (selneg, a, b) rows."""
+    head = 20 + 2 * len(objects)
+    while head % 4: head += 1
+    obj_bytes, curves = [], b''
+    # first lay out the objects to know where the curves go
+    sizes = [4 + sum(8 if isinstance(w, tuple) else 4 for w in words) for _, words in objects]
+    curve_at = head + sum(sizes)
+    offs, body = [], b''
+    for flags, words in objects:
+        offs.append(head + len(body))
+        o = u16(flags) + u16(0)
+        for w in words:
+            if isinstance(w, tuple):
+                info, data = w
+                o += u32(info) + u32(curve_at + len(curves))
+                curves += data
+                while len(curves) % 4: curves += b'\0'
+            else:
+                o += s32(w)
+        body += o
+    pivot_at = curve_at + len(curves)
+    pdata = b''.join(u16(sn) + s16(a) + s16(b) for sn, a, b in pivots)
+    anim = b'J\0AC' + u16(frames) + u16(len(objects)) + u32(0) + u32(pivot_at) + u32(pivot_at + len(pdata))
+    anim += b''.join(u16(o) for o in offs)
+    anim += b'\0' * (head - len(anim))
+    anim += body + curves + pdata
+    adict = dict_block([('anim', u32(0))], 4)
+    adict = dict_block([('anim', u32(8 + len(adict)))], 4)
+    return nitro_file(b'BCA0', [b'JNT0' + u32(8 + len(adict) + len(anim)) + adict + anim])
+
+def windmill_turn(frames=16):
+    """Node 0 turning a full round about z in [frames] frames: a rotation curve of pivot matrices."""
+    import math
+    pivots = []
+    for k in range(frames):
+        a = math.cos(2 * math.pi * k / frames); b = math.sin(2 * math.pi * k / frames)
+        pivots.append((8 | (2 << 4), fx(a), fx(b)))     # pivot z; c = -b: a rotation about z
+    idx = b''.join(u16(0x8000 | k) for k in range(frames))
+    flags = (1 << 1) | (1 << 9)                         # no translation, a rotation curve, no scale
+    return jnt_anim(frames, [(flags, [((0 << 0) | (frames << 16), idx)])], pivots)
+
+def door_slide(x0, x1, frames=8):
+    """Node 0 sliding across from x [x0] to [x1] in [frames] frames (y and z stay 0)."""
+    xs = b''.join(s32(fx(x0 + (x1 - x0) * k / (frames - 1))) for k in range(frames))
+    flags = (1 << 4) | (1 << 5) | (1 << 6) | (1 << 9)   # x a curve, y and z constant, no rotation or scale
+    return jnt_anim(frames, [(flags, [(frames << 16, xs), 0, 0])], [])
+
+def btp0(frames, tex_names, pal_names, tracks):
+    """A BTP0 texture pattern: tracks [(material, [(frame, texture index, palette index)])]."""
+    entries, keys = [], b''
+    head = 12 + dict_size(len(tracks), 8)
+    for mat, ks in tracks:
+        entries.append((mat, u16(len(ks)) + u16(0) + u16(0) + u16(head + len(keys))))
+        for fr, t, pl in ks: keys += u16(fr) + u8(t) + u8(pl)
+    tex_off = head + len(keys)
+    names = b''.join(n.encode().ljust(16, b'\0') for n in tex_names)
+    pnames = b''.join(n.encode().ljust(16, b'\0') for n in pal_names)
+    anim = b'M\0PT' + u16(frames) + u8(len(tex_names)) + u8(len(pal_names)) + u16(tex_off) + u16(tex_off + len(names))
+    anim += dict_block(entries, 8) + keys + names + pnames
+    adict = dict_block([('anim', u32(0))], 4)
+    adict = dict_block([('anim', u32(8 + len(adict)))], 4)
+    return nitro_file(b'BTP0', [b'PAT0' + u32(8 + len(adict) + len(anim)) + adict + anim])
+
+def prop_entry(flags, ids):
+    """a/1/0/7: has animations, flags, bicycle slope, pad, a word, four animation file numbers."""
+    ids = list(ids) + [-1] * (4 - len(ids))
+    return u8(1) + u8(flags) + u8(0) + u8(0) + u32(0) + b''.join(s32(i) for i in ids)
+
+NO_ANIM = u8(0) * 4 + u32(0) + s32(-1) * 4
+
+def pic(w, h, fmt, rows):
+    """Texture data from rows of palette indices (format 2: 4 colours, 3: 16 colours)."""
+    out = b''
+    per = 4 if fmt == 2 else 2
+    bits = 2 if fmt == 2 else 4
+    for y in range(h):
+        for x in range(0, w, per):
+            v = 0
+            for k in range(per): v |= (rows[y][x + k] & ((1 << bits) - 1)) << (bits * k)
+            out += u8(v)
+    return out
+
+def mark(w, h, cells):
+    """Rows of a picture with colour 1 at [cells] (x, y) and 2 round the edge of them."""
+    rows = [[0] * w for _ in range(h)]
+    for x, y in cells: rows[y][x] = 1
+    for x, y in cells:
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            if 0 <= x + dx < w and 0 <= y + dy < h and rows[y + dy][x + dx] == 0: rows[y + dy][x + dx] = 2
+    return rows
+
+def fx_btx(name, w, h, fmt, frames, colours, plain=False):
+    """A BTX0 with [frames] (lists of (x, y) cells) named name.1, name.2 ... (or just name), one palette."""
+    texs = []
+    for i, cells in enumerate(frames):
+        tn = name if plain else '%s.%d' % (name, i + 1)
+        texs.append((tn, w, h, fmt, pic(w, h, fmt, mark(w, h, cells)), True))
+    pal = [0] + colours + [0] * ((4 if fmt == 2 else 16) - 1 - len(colours))
+    pal_name = name if fmt == 3 else (name + ('_pl' if plain else '.1_pl'))
+    return nitro_file(b'BTX0', [tex0(texs, [(pal_name, pal)])])
+
+def bubble(symbol_cells):
+    """An emote bubble 32x32: a box from (8, 6) to (24, 22), its point down to (16, 25), and a symbol."""
+    cells = [(x, y) for y in range(6, 23) for x in range(8, 25)] + [(16, 23), (16, 24), (15, 23), (17, 23)]
+    return cells
+
+def field_effects():
+    """a/1/0/3: the effects where pret/pokeheartgold has them (but the item ball, further on)."""
+    members = [b''] * 120
+    white, dark = rgb(248, 248, 248), rgb(64, 64, 64)
+    names = {2: 'fuki_heart', 3: 'fuki_kao1', 4: 'fuki_kao2', 5: 'fuki_kao3', 6: 'fuki_kao4', 7: 'fuki_kao5', 8: 'fuki_onpu',
+             9: 'fuki_hatena', 10: 'fuki_bikkuri', 11: 'fuki_ase', 12: 'fuki_komari', 13: 'fuki_doku', 14: 'fuki_chinmoku', 15: 'fuki_pikon'}
+    for i, n in names.items():
+        members[i] = fx_btx(n, 32, 32, 3, [bubble(None), bubble(None)[:-4]], [white, dark])
+    ring = lambda r: [(8 + x, 8 + y) for y in range(-8, 8) for x in range(-8, 8) if abs((x * x + y * y) ** 0.5 - r) < 0.6]
+    members[18] = fx_btx('shibuki', 32, 32, 2, [[(16 + k, 28 - abs(k)) for k in range(-6, 7)] for _ in range(3)], [rgb(200, 230, 255), white])
+    members[20] = fx_btx('hero_kemu', 16, 16, 2, [[(x, y) for x in range(5, 11) for y in range(9 - k, 14)] for k in range(4)], [rgb(220, 210, 190), white])
+    members[26] = fx_btx('seed_kira', 16, 32, 2, [[(8, 12), (8, 13), (7, 13), (9, 13), (8, 14)], [(8, 16)]], [white, rgb(255, 255, 160)])
+    members[27] = nitro_file(b'BMD0', [mdl0('nothing', quads(box(-2, 2, 0, 4, -2, 2), SCALE), None, None, SCALE)])
+    members[29] = fx_btx('ripple', 16, 16, 2, [ring(r) for r in (2, 3, 5, 7)], [white, rgb(180, 220, 255)])
+    members[30] = fx_btx('n_ripple', 16, 16, 2, [ring(r) for r in (2, 3, 5, 7)], [rgb(120, 90, 50), rgb(90, 60, 30)])
+    for k, d in enumerate('udlr'):
+        feet = [(5, 4 + k), (5, 5 + k), (10, 8), (10, 9)]
+        members[74 + k] = fx_btx('f_mark_' + d, 16, 16, 2, [feet], [rgb(160, 120, 70), rgb(140, 100, 60)], plain=True)
+        members[90 + k] = fx_btx('nf_mark_' + d, 16, 16, 2, [feet], [rgb(230, 240, 255), rgb(200, 210, 230)], plain=True)
+    # the item ball, not where the game has it
+    ball = [(x, y) for y in range(4, 13) for x in range(4, 13) if (x - 8) ** 2 + (y - 8) ** 2 <= 16]
+    members[40] = fx_btx('monstarball', 16, 16, 3, [ball], [rgb(232, 40, 40), dark], plain=True)
+    return narc(members)
 
 def build():
     files = {}
@@ -461,7 +623,7 @@ def build():
     cave = matrix(1, 1, None, None, [2], name=b'm_dun2501_')
     files['a/0/4/1'] = narc([world] + [empty] * 41 + [cave])
     # land data
-    b0 = land(perms_block0(), [(1, 0.0, 16.0, 64.0), (2, -96.0, 16.0, -48.0), (3, 0.0, 0.0, 0.0)], ground_model(sea=True),
+    b0 = land(perms_block0(), [(1, 0.0, 16.0, 64.0), (2, -96.0, 16.0, -48.0), (3, 0.0, 0.0, 0.0), (4, -96.0, 56.0, -40.0), (5, 8.0, 16.0, 96.5)], ground_model(sea=True),
               bdhc([flat(16), (SLOPE_X, -256, 256, 256, SN, SD)]), bgs=b'\x01\x00\x00\x80\x08\x14\x0c\x18')
     b1 = land([(0, 0) if 15 <= i % 32 <= 17 else (0, 0x80) for i in range(1024)], [], ground_model(), bdhc([flat(16)]))
     b2 = land(perms_cave(), [], ground_model(0.0), bdhc([flat(0)]))
@@ -470,7 +632,7 @@ def build():
     day = u16(0) + u16(0) + u16(0) + u8(1) + u8(1)  # scrolling animation 0
     steady = u16(0) + u16(0) + u16(0xFFFF) + u8(1) + u8(0)
     files['a/0/4/2'] = narc([day] * 87 + [steady] + [day] * 2)
-    files['a/0/4/3'] = narc([u16(2) + u16(1) + u16(3)])
+    files['a/0/4/3'] = narc([u16(4) + u16(1) + u16(3) + u16(4) + u16(5)])
     # textures
     green = [rgb(64, 168, 72), rgb(56, 152, 64), rgb(80, 184, 88), rgb(48, 136, 56)]
     ground_tex = solid_tex([[(x + y) % 2 for x in range(8)] for y in range(8)])
@@ -480,14 +642,33 @@ def build():
     files['a/1/3/9'] = texture_swaps()
     files['a/1/4/0'] = texture_scrolls()
     red = [rgb(200, 48, 40), rgb(176, 40, 32), rgb(216, 64, 56), rgb(160, 32, 24)]
+    yellow = [rgb(240, 216, 48), rgb(232, 200, 40), rgb(248, 224, 64), rgb(224, 192, 32)]
+    glass = [rgb(216, 216, 200)] * 4
     wall_tex = solid_tex([[0] * 8 for _ in range(8)])
-    files['a/0/7/0'] = narc([nitro_file(b'BTX0', [tex0([('wall', 8, 8, 2, wall_tex, False)], [('wall_pl', red + [0] * 12)])])])
+    files['a/0/7/0'] = narc([nitro_file(b'BTX0', [tex0([('wall', 8, 8, 2, wall_tex, False), ('wall_lit', 8, 8, 2, wall_tex, False),
+                                                         ('mado', 8, 8, 2, wall_tex, False), ('lamp', 8, 8, 2, wall_tex, False)],
+                                                        [('wall_pl', red + [0] * 12), ('lit_pl', yellow + [0] * 12),
+                                                         ('glass_pl', glass + [0] * 12), ('lamp_pl', glass + [0] * 12)])])])
     # building models: 0 a dummy, 1 the house (textured by the area's set), 2 a box, 3 a floating layer
-    house = nitro_file(b'BMD0', [mdl0('house', quads(box(-32, 32, 0, 48, -32, 32), SCALE), 'wall', 'wall_pl', SCALE, both_sides=True)])
+    # the house, in the light of the time of day: walls, and on its front a window and a lamp
+    house = nitro_file(b'BMD0', [mdl0_parts('house', [
+        (quads(box(-32, 32, 0, 48, -32, 32), SCALE, normals=True), 'wall', 'wall_pl', 'mat0', True, 0x7FFF, 1),
+        (quads([[(12, 4, 32.3), (26, 4, 32.3), (26, 20, 32.3), (12, 20, 32.3)]], SCALE, normals=True), 'mado', 'glass_pl', 'h_mado', True, 0x7FFF, 1),
+        (quads([[(-28, 12, 32.3), (-20, 12, 32.3), (-20, 20, 32.3), (-28, 20, 32.3)]], SCALE, normals=True), 'lamp', 'lamp_pl', 'ko_light', True, 0x7FFF, 1),
+    ], SCALE)])
     dummy = nitro_file(b'BMD0', [mdl0('dummy', quads(box(-2, 2, 0, 4, -2, 2), SCALE), None, None, SCALE)])
     other = nitro_file(b'BMD0', [mdl0('box', quads(box(-16, 16, 0, 32, -16, 16), SCALE), None, None, SCALE, both_sides=True, color=rgb(40, 40, 248))])
     layer = nitro_file(b'BMD0', [mdl0('wind', quads([[(-200, 160, -200), (-200, 160, 200), (200, 160, 200), (200, 160, -200)]], SCALE), None, None, SCALE, color=0x7FFF)])
-    files['a/0/4/0'] = narc([dummy, house, other, layer])
+    mill = nitro_file(b'BMD0', [mdl0('mill', quads([[(-12, -3, 0), (12, -3, 0), (12, 3, 0), (-12, 3, 0)]], SCALE), None, None, SCALE, both_sides=True, color=rgb(248, 224, 40))])
+    door = nitro_file(b'BMD0', [mdl0('door', quads([[(-8, 0, 0), (8, 0, 0), (8, 24, 0), (-8, 24, 0)]], SCALE), None, None, SCALE, both_sides=True, color=rgb(150, 40, 200))])
+    files['a/0/4/0'] = narc([dummy, house, other, layer, mill, door])
+    # their animations: the windmill turns; the door slides open and shut; the house by the time of day
+    files['a/1/0/6'] = narc([windmill_turn(), door_slide(0, 14), door_slide(14, 0),
+                             btp0(1, ['wall'], ['wall_pl'], [('mat0', [(0, 0, 0)])]),
+                             btp0(1, ['wall_lit'], ['lit_pl'], [('mat0', [(0, 0, 0)])])])
+    files['a/1/0/7'] = narc([NO_ANIM, prop_entry(8, [3, 3, 3, 4]), NO_ANIM, NO_ANIM, prop_entry(0, [0]), prop_entry(1, [1, 2])])
+    files['a/1/0/8'] = narc([NO_ANIM])
+    files['a/1/0/3'] = field_effects()
     files['a/1/4/8'] = narc([dummy])
     # follower sprites: one set of frames shared by every member
     btx = follower_btx()
@@ -506,7 +687,9 @@ def build():
         (SPRITE_SWIMMER, 0, 1, 0, 2, 0, 0, 32 + 22, 13),      # in the water, facing left
         (SPRITE_TREE, 0, 0, 0, 1, 0, 0, 32 + 11, 8),          # an apricorn tree: not a person
         (SPRITE_MAN, 0, 0, 0, 1, 0, 0, 32 + 2, 2),            # up on the rocks: nowhere to stand
-    ], bgs=[(1, 32 + 15, 21), (2, 32 + 7, 10)])               # a sign on the front of the house; a hidden item
+        (SPRITE_ITEM_BALL, 0, 3, 0x2F0, 0, 0, 0, 32 + 4, 11), # an item ball (hidden once picked up in the game)
+    ], bgs=[(1, 32 + 15, 21), (2, 32 + 7, 10)],               # a sign on the front of the house; a hidden item
+       warps=[(32 + 16, 21)])                                  # the house's door
     empty_events = event_file([])
     files['a/0/3/2'] = narc([empty_events] * ROUTE29_EVENTS + [route29] + [empty_events] * 4)
     # types (poketool/personal): Normal for everyone but a few

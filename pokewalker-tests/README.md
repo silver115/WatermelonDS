@@ -88,7 +88,10 @@ area doesn't load, one a floating effect layer) and follower sprites with a shin
 palette, plus a sea patch with the game's texture swaps (`a/1/3/9`) and scroll
 (`a/1/4/0`), and the map's people (`a/0/3/2` events, sixteen-frame sprites): a
 wanderer, a trainer, a swimmer, someone hidden by a flag, an apricorn tree and
-someone with nowhere to stand; a sign, a ledge, and Pokémon types (`a/0/0/2`). `MapTest.kt` checks which spot is picked, the colours drawn, which
+someone with nowhere to stand; a sign, a ledge, and Pokémon types (`a/0/0/2`);
+a windmill and a door that move and a house that changes by the time of day
+(`a/1/0/6`, `a/1/0/7`), a window and a lamp, sand, puddles, an item ball, the door's
+warp, and the game's field effects (`a/1/0/3`) drawn as plain marks. `MapTest.kt` checks which spot is picked, the colours drawn, which
 tiles the Pokémon may stand on and how high, that a cave counts only its own
 floor, the moving sea, the drifting ambience (clouds and petals by day, fireflies
 at night, grass shaken up), the sprite and the walking Pokémon read from the
@@ -100,14 +103,22 @@ without a shadow; the course's Pokémon and the ones caught read from the walker
 memory, hopping down the ledge and reading the sign, swimming, flying and fading
 by type, the Pokémon caught following along, wild Pokémon coming out of the tall
 grass, the weather, and the games (fishing, tag, the Bug-Catching Contest, the
-Unown hunt and the berry patch) played through:
+Unown hunt and the berry patch) played through; then buildings that move (a
+windmill's sails turning, a door sliding open and shut, the Pokémon going up to it),
+the house's texture by the time of day, its window and lamp lit after dark, the
+game's field effects (emote bubbles, footprints in sand, splashes in puddles,
+dust, sparkles, the item ball) and life on the map: an item ball turning up where
+the map keeps one and being fetched, a tossed berry run over to and eaten, falling
+asleep at night and waking on a tap or new steps, moods from today's steps, birds
+flying over, a Magikarp leaping, a shiny Pokémon sparkling, and the emote bubbles
+of the Pokémon and the people:
 
 ```sh
 python3 pokewalker-tests/map/gen_map_rom.py /tmp/map.nds /tmp/map_empty.nds
 P=app/src/main/java/me/magnum/melonds/pokewalker
-kotlinc -d /tmp/map.jar $P/NitroFiles.kt $P/SoftRenderer.kt $P/CryArchive.kt $P/FieldMap.kt \
+kotlinc -d /tmp/map.jar $P/NitroFiles.kt $P/SoftRenderer.kt $P/CryArchive.kt $P/FieldMap.kt $P/MapProps.kt \
     $P/FollowerSprites.kt $P/MapExplorer.kt $P/MapAnimation.kt $P/MapAmbience.kt $P/MapPeople.kt $P/MapGames.kt \
-    pokewalker-tests/map/MapTest.kt
+    $P/MapEffects.kt $P/MapLife.kt pokewalker-tests/map/MapTest.kt
 java -cp /tmp/map.jar:$KOTLIN_HOME/lib/kotlin-stdlib.jar MapTestKt /tmp/map.nds /tmp/map_empty.nds
 ```
 

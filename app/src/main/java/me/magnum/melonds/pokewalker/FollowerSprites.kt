@@ -148,6 +148,27 @@ data class WalkingPokemon(val species: Int, val form: Int, val female: Boolean, 
     }
 }
 
+/** Who's on the walk: the walking Pokémon, the course's Pokémon and the ones caught so far (from the walker's memory). */
+data class WalkParty(
+    val walking: WalkingPokemon?,
+    val route: List<WalkingPokemon> = emptyList(),
+    val caught: List<WalkingPokemon> = emptyList(),
+    /** The walk's items (the game's item numbers). */
+    val items: List<Int> = emptyList(),
+) {
+    companion object {
+        fun fromImage(image: ByteArray?) =
+            WalkParty(WalkingPokemon.fromImage(image), WalkingPokemon.routePokemon(image), WalkingPokemon.caught(image), routeItems(image))
+
+        /** The walk's ten items (route info +0x8C, picowalker-core's le_route_items), leaving out empty ones. */
+        fun routeItems(image: ByteArray?): List<Int> {
+            val o = 0x8F8C
+            if (image == null || image.size < o + 20) return emptyList()
+            return (0 until 10).map { (image[o + it * 2].toInt() and 0xFF) or ((image[o + it * 2 + 1].toInt() and 0xFF) shl 8) }.filter { it in 1..536 }
+        }
+    }
+}
+
 /**
  * Pokémon types from the player's own ROM: the personal data (`a/0/0/2`,
  * poketool/personal/personal.narc), a member a species, type 1 and 2 at bytes 6 and 7.

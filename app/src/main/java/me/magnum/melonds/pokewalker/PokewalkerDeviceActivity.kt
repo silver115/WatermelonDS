@@ -12,9 +12,11 @@ import android.os.SystemClock
 import android.util.TypedValue
 import android.view.Choreographer
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.ImageButton
@@ -83,6 +85,21 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
     private var exploreCaption: TextView? = null
     private var gamesButton: ImageButton? = null
     private var captionAt = 0L
+    // a press held on the map tosses a berry
+    private var pressX = 0f
+    private var pressY = 0f
+    private var pressView: View? = null
+    private var tossed = false
+    private val longPress = Runnable {
+        val map = scene.map
+        val v = pressView
+        if (exploring && map != null && v != null) {
+            tossed = true
+            val (x, y) = mapPoint(v, pressX, pressY) ?: return@Runnable
+            if (map.toss(x, y, SystemClock.uptimeMillis())) v.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            scene.invalidateSelf()
+        }
+    }
     private val leaveExplore = object : OnBackPressedCallback(false) {
         override fun handleOnBackPressed() = setExploring(false)
     }
@@ -521,7 +538,7 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
         }
         val b = scene.bounds
         scene.map = if (!walking) null else RouteMaps.get(this, status!!.route, status.routeImage, walkParty, b.width(), b.height())
-        scene.map?.steps = status?.totalSteps ?: 0
+        if (status != null) scene.map?.setSteps(status.totalSteps, status.todaySteps, Pokewalker.stepGoal(this), SystemClock.uptimeMillis())
         exploreButton?.visibility = if (scene.map != null) View.VISIBLE else View.GONE
         updateGamesButton()
         if (exploring && scene.map == null) setExploring(false)
@@ -574,6 +591,7 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
         val text = getString(R.string.pokewalker_explore_caption, map.scene.course.name, map.scene.course.place, map.game) + "\n" +
             (line ?: getString(when {
                 !map.hasPokemon -> R.string.pokewalker_explore_hint_no_sprite
+                map.asleep -> R.string.pokewalker_explore_hint_asleep
                 map.hasPeople -> R.string.pokewalker_explore_hint_people
                 else -> R.string.pokewalker_explore_hint
             }, name))
@@ -583,7 +601,7 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
     private fun updateGamesButton() {
         val b = gamesButton ?: return
         val map = scene.map
-        b.visibility = if (exploring && map != null && map.availableGames().isNotEmpty()) View.VISIBLE else View.GONE
+        b.visibility = if (exploring && map != null && (map.availableGames().isNotEmpty() || map.hasPokemon)) View.VISIBLE else View.GONE
     }
 
     /** The games menu: the ones there are here, and a way to stop the one that's on. */
@@ -592,10 +610,15 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
         val menu = PopupMenu(this, anchor)
         val games = map.availableGames()
         for ((i, g) in games.withIndex()) menu.menu.add(0, i, i, getString(gameName(g)))
+        if (map.hasPokemon && map.gameOn == null) menu.menu.add(0, 101, 99, getString(R.string.pokewalker_toss_berry))
         if (map.gameOn != null) menu.menu.add(0, 100, 100, getString(R.string.pokewalker_game_stop))
         menu.setOnMenuItemClickListener { item ->
             val now = SystemClock.uptimeMillis()
-            if (item.itemId == 100) map.stopGame(now) else games.getOrNull(item.itemId)?.let { map.startGame(it, now) }
+            when (item.itemId) {
+                100 -> map.stopGame(now)
+                101 -> map.tossNear(now)
+                else -> games.getOrNull(item.itemId)?.let { map.startGame(it, now) }
+            }
             updateCaption()
             true
         }
@@ -638,24 +661,59 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
             MapGames.What.BERRY_GROWING -> getString(R.string.pokewalker_berry_growing, berry, l.m)
             MapGames.What.BERRY_PICKED -> getString(R.string.pokewalker_berry_picked, berry, l.m)
             MapGames.What.BERRY_NOWHERE -> getString(R.string.pokewalker_berry_nowhere, name)
+            MapGames.What.ITEM_FOUND -> getString(R.string.pokewalker_item_found, name, itemText(l.n))
+            MapGames.What.TREAT_EATEN -> getString(R.string.pokewalker_treat_eaten, name, berry)
+            MapGames.What.TREAT_NOWHERE -> getString(R.string.pokewalker_treat_nowhere, name)
         }
     }
 
-    /** Taps while exploring: on the Pokémon it hops and cries, elsewhere it walks over. */
+    /** "a Potion", "an Ether" ("an item" when it isn't known). */
+    private fun itemText(item: Int): String {
+        val name = PokewalkerNative.itemName(item).takeIf { it.isNotBlank() && it != "unknown" } ?: return getString(R.string.pokewalker_item_unknown)
+        return (if (name.first().uppercaseChar() in "AEIOU") "an " else "a ") + name
+    }
+
+    /**
+     * Taps while exploring: on the Pokémon it hops and cries, elsewhere it walks over. A press
+     * held still tosses a berry there for it.
+     */
     private fun exploreTouch(v: View, e: MotionEvent): Boolean {
         if (!exploring) return false
-        if (e.actionMasked == MotionEvent.ACTION_UP) {
-            val map = scene.map ?: return true
-            val root = rootLayout ?: return true
-            val at = IntArray(2)
-            val rootAt = IntArray(2)
-            v.getLocationInWindow(at)
-            root.getLocationInWindow(rootAt)
-            if (map.tap(e.x + at[0] - rootAt[0], e.y + at[1] - rootAt[1], SystemClock.uptimeMillis())) cry(map)
-            scene.invalidateSelf()
-            updateCaption()
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                tossed = false
+                pressX = e.x
+                pressY = e.y
+                pressView = v
+                v.removeCallbacks(longPress)
+                v.postDelayed(longPress, ViewConfiguration.getLongPressTimeout().toLong())
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val slop = ViewConfiguration.get(this).scaledTouchSlop
+                if (kotlin.math.abs(e.x - pressX) > slop || kotlin.math.abs(e.y - pressY) > slop) v.removeCallbacks(longPress)
+            }
+            MotionEvent.ACTION_CANCEL -> v.removeCallbacks(longPress)
+            MotionEvent.ACTION_UP -> {
+                v.removeCallbacks(longPress)
+                if (tossed) return true
+                val map = scene.map ?: return true
+                val (x, y) = mapPoint(v, e.x, e.y) ?: return true
+                if (map.tap(x, y, SystemClock.uptimeMillis())) cry(map)
+                scene.invalidateSelf()
+                updateCaption()
+            }
         }
         return true
+    }
+
+    /** A point in [v] as a point of the whole screen's box (where the map is drawn). */
+    private fun mapPoint(v: View, x: Float, y: Float): Pair<Float, Float>? {
+        val root = rootLayout ?: return null
+        val at = IntArray(2)
+        val rootAt = IntArray(2)
+        v.getLocationInWindow(at)
+        root.getLocationInWindow(rootAt)
+        return (x + at[0] - rootAt[0]) to (y + at[1] - rootAt[1])
     }
 
     private fun cry(map: RouteMap) {
@@ -718,6 +776,7 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
         if (Pokewalker.celebratedDay(this) == today) return
         Pokewalker.setCelebratedDay(this, today)
         skin?.celebrate()
+        scene.map?.celebrate(SystemClock.uptimeMillis())
         if (status.hasPokemon && status.species > 0) PokemonCries.play(this, status.species, lastVolume) {}
     }
 

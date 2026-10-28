@@ -12,6 +12,14 @@ import me.magnum.melonds.pokewalker.FollowerSprites
 import me.magnum.melonds.pokewalker.MapSpritePainter
 import me.magnum.melonds.pokewalker.MapWanderer
 import me.magnum.melonds.pokewalker.WalkingPokemon
+import me.magnum.melonds.pokewalker.WalkParty
+import me.magnum.melonds.pokewalker.PropAnimations
+import me.magnum.melonds.pokewalker.FieldEffectArt
+import me.magnum.melonds.pokewalker.FieldEffects
+import me.magnum.melonds.pokewalker.Emote
+import me.magnum.melonds.pokewalker.Emotes
+import me.magnum.melonds.pokewalker.MapLife
+import me.magnum.melonds.pokewalker.SceneProps
 import java.io.RandomAccessFile
 import kotlin.math.abs
 import kotlin.random.Random
@@ -21,7 +29,10 @@ import kotlin.system.exitProcess
  * The route map on the fake ROM from gen_map_rom.py: which spot is picked, what is drawn, which
  * tiles the Pokémon may walk on and how high, the follower sprite, the wandering and the drawing
  * of the sprite behind things, the people of the place, the wild Pokémon, the one following,
- * the moves by type, ledges and signs, the weather and the games. Usage: MapTest <fake.nds> <fake_without_maps.nds>
+ * the moves by type, ledges and signs, the weather and the games; buildings that move (a
+ * windmill, a door) and change by the time of day, lit windows and lamps, the game's field
+ * effects, and life on the map (item balls, a tossed berry, birds and Magikarp, sleep, moods,
+ * sparkles, emote bubbles). Usage: MapTest <fake.nds> <fake_without_maps.nds>
  */
 private var checks = 0
 private var failures = 0
@@ -71,7 +82,7 @@ fun main(args: Array<String>) {
     println(log.joinToString("\n"))
     check(scene.width == w && scene.height == h && scene.image.size == w * h, "picture size")
     check(scene.tiles.isNotEmpty(), "there are tiles to walk on")
-    check(scene.lightKey == FieldMap.lightIndex(900), "drawn with the 15:00 light")
+    check(scene.lightKey == FieldMap.dayKey(900) && FieldMap.dayKey(900) != FieldMap.dayKey(1100) && FieldMap.dayKey(590) != FieldMap.dayKey(610), "drawn with the 15:00 light (and redrawn when the light or the time of day changes)")
     check(scene.start != null && scene.tile(scene.start!!.gx, scene.start!!.gy) != null, "the start is a walkable tile")
 
     // every walkable tile is open ground of block 0 (blocks: x 32-63, y 0-31) or block 1's path
@@ -703,8 +714,8 @@ fun main(args: Array<String>) {
 
         // tag: a wild one runs off, the Pokémon chases it
         check(games.start(MapGames.Game.TAG, tg), "tag starts")
-        val target = crowd.wildOut().firstOrNull()
-        check(target != null && target.flee, "with a wild Pokémon running away")
+        val target = crowd.wildOut().firstOrNull { it.flee }
+        check(target != null && crowd.wildOut().count { it.flee } == 1, "with a wild Pokémon running away")
         var ended: MapGames.What? = null
         run(30_000) { val w = games.lineAt(tg)?.what; if (games.game == null && ended == null) ended = w }
         check(ended == MapGames.What.TAG_CAUGHT || ended == MapGames.What.TAG_AWAY, "tag ends tagged or got away ($ended)")
@@ -769,6 +780,9 @@ fun main(args: Array<String>) {
         check(!pk.held, "stopping lets it go about again")
     }
 
+    buildingsThatMove(src, scene, w, h)
+    effectsAndLife(src, scene)
+
     // ---- the cave course: only the real cave floor ----
     val cave = FieldMap.render(src, FieldMap.COURSES[5], w, h, 900)
     check(cave.tiles.isNotEmpty(), "cave tiles to walk on")
@@ -785,7 +799,539 @@ fun main(args: Array<String>) {
     }
     check(FollowerSprites.load(source(args[1]), 25, 0, false, false) == null, "no sprites in that ROM")
     check(FieldPeople.spots(source(args[1]), listOf(33)).isEmpty(), "no people in that ROM")
+    check(FieldEffectArt.load(source(args[1])) == null, "no field effects in that ROM")
 
     println("$checks checks, $failures failed")
     exitProcess(if (failures == 0) 0 else 1)
+}
+
+private fun luma(c: Int) = (red(c) * 3 + green(c) * 6 + blue(c)) / 10
+
+private fun pixel(scene: FieldMap.Scene, x: Double, y: Double, z: Double): Int? {
+    val p = scene.project(x, y, z) ?: return null
+    val px = p[0].toInt()
+    val py = p[1].toInt()
+    if (px !in 0 until scene.width || py !in 0 until scene.height) return null
+    return scene.image[py * scene.width + px]
+}
+
+/** The windmill, the door, the house by the time of day, and the lights after dark. */
+private fun buildingsThatMove(src: CryArchive.Source, scene: FieldMap.Scene, w: Int, h: Int) {
+    check(PropAnimations.timeOfDay(300) == 0 && PropAnimations.timeOfDay(900) == 1 && PropAnimations.timeOfDay(1100) == 2 &&
+        PropAnimations.timeOfDay(1320) == 3 && PropAnimations.timeOfDay(120) == 3, "the game's times of day")
+    val props = scene.props
+    check(props != null && props.props.size == 2, "two buildings move: the windmill and the door (${props?.props?.size})")
+    if (props == null) return
+    val mill = props.props.firstOrNull { !it.isDoor }
+    val door = props.props.firstOrNull { it.isDoor }
+    check(mill?.loop?.frames == 16, "the windmill turns round in 16 frames")
+    check(door?.opening?.frames == 8 && door.closing?.frames == 8, "the door slides open in 8 frames, and shut in 8")
+    if (mill == null || door == null) return
+    // joint animations: a quarter turn about z at frame 4; the door 14 across when open
+    val m4 = mill.loop!!.nodes(4, mill.model.nodes)[0]
+    check(abs(m4[0]) < 0.01 && near(m4[1], -1.0) && near(m4[4], 1.0) && abs(m4[5]) < 0.01 && near(m4[10], 1.0), "frame 4: a quarter turn about z (${m4.take(11)})")
+    check(near(door.opening!!.nodes(7, door.model.nodes)[0][3], 14.0) && near(door.opening!!.nodes(0, door.model.nodes)[0][3], 0.0) &&
+        near(door.closing!!.nodes(7, door.model.nodes)[0][3], 0.0), "the door slides 14 across, and back")
+    fun yellow(c: Int) = c ushr 24 != 0 && red(c) > 150 && green(c) > 130 && blue(c) < 110
+    fun purple(c: Int) = c ushr 24 != 0 && red(c) > 90 && blue(c) > 120 && green(c) < 90
+    val sails0 = props.overlay.count { yellow(it) }
+    check(sails0 > 10, "the sails are drawn over the picture ($sails0 pixels)")
+    check(scene.image.none { yellow(it) }, "and not in the picture itself, where they'd stand still")
+    val before = props.overlay.copyOf()
+    check(props.update(6, scene.image), "a few frames on, the sails have turned")
+    check(!before.contentEquals(props.overlay), "and look different")
+    check(!props.update(6, scene.image), "the same frame again: nothing to do")
+    props.update(16 * 7, scene.image)
+    check(props.overlay.count { yellow(it) } in sails0 - 3..sails0 + 3, "a whole number of turns later they're as they were")
+    // the door, opening and shutting
+    fun doorX(): Double {
+        var n = 0; var sum = 0.0
+        for (y in door.box[1]..door.box[3]) for (x in door.box[0]..door.box[2]) if (purple(props.overlay[y * w + x])) { n++; sum += x }
+        return if (n == 0) -1.0 else sum / n
+    }
+    props.update(32, scene.image)
+    val shut = doorX()
+    check(shut > 0, "the door is drawn, shut")
+    props.open(door, 40)
+    check(props.doorBusy(door, 41) && !props.doorBusy(door, 39), "opened at frame 40")
+    props.update(49, scene.image)
+    val open = doorX()
+    check(open > shut + 8, "it slides open ($shut -> $open)")
+    props.open(door, 50)
+    check(props.doorBusy(door, 40L + 8 + SceneProps.DOOR_HOLD + 4), "opening it again while it's open changes nothing")
+    props.update(40L + 8 + SceneProps.DOOR_HOLD + 8 + 2, scene.image)
+    check(abs(doorX() - shut) < 1.0 && !props.doorBusy(door, 40L + 8 + SceneProps.DOOR_HOLD + 8 + 2), "and shuts again after a while")
+    // where the door is: the warp in the house's front, ground in front of it
+    check(scene.doors.size == 1 && scene.doors[0].first.gx == 48 && scene.doors[0].first.gy == 21 && scene.doors[0].second === door, "the door's warp at (48, 21)")
+    check(scene.tile(48, 22) != null && scene.tile(48, 21) == null, "with ground in front of it, the door itself not")
+    // the Pokémon goes up to the door now and then (and stands looking at it)
+    val pk = MapWanderer(scene, Random(31))
+    var t = 0L
+    var atDoor = 0L
+    while (t < 900_000) {
+        pk.update(t)
+        if (pk.idle && pk.at.gx == 48 && pk.at.gy == 22 && pk.facing == FollowerSprites.UP) atDoor += 100
+        t += 100
+    }
+    check(atDoor >= 2_000, "now and then it goes up to the door ($atDoor ms in 15 minutes)")
+
+    // the house by the time of day, and its window and lamp lit after dark
+    check(FieldMap.lightKind("h_mado", null) == FieldMap.WINDOW && FieldMap.lightKind("ybc_wd", null) == FieldMap.WINDOW &&
+        FieldMap.lightKind("mat0", "si_mado.2") == FieldMap.WINDOW, "windows by their names")
+    check(FieldMap.lightKind("ko_light", null) == FieldMap.LAMP && FieldMap.lightKind("kk_tourou", null) == FieldMap.LAMP &&
+        FieldMap.lightKind("mat0", "wall") == 0 && FieldMap.lightKind(null, null) == 0, "lamps by theirs, and the rest neither")
+    check(scene.glows.isEmpty(), "by day nothing is lit")
+    val roofAt = doubleArrayOf(32 * 16 + 256.0, 64.0, 256.0 + 64)
+    val evening = FieldMap.render(src, FieldMap.COURSES[0], w, h, 18 * 60 + 10)
+    check(evening.timeOfDay == 2 && evening.glows.size == 4 && evening.glows[3] == FieldMap.LAMP.toFloat(), "in the evening the lamp is lit (${evening.glows.toList()})")
+    val night = FieldMap.render(src, FieldMap.COURSES[0], w, h, 22 * 60)
+    check(night.timeOfDay == 3 && night.glows.size == 8 && (0 until 2).map { night.glows[it * 4 + 3] }.toSet() == setOf(1f, 2f),
+        "at night the window too (${night.glows.toList()})")
+    check(night.lightKey != evening.lightKey && evening.lightKey != scene.lightKey, "each drawn with its own light")
+    val roof = pixel(night, roofAt[0], roofAt[1], roofAt[2])
+    check(roof != null && green(roof) > red(roof) * 6 / 10 && green(roof) > blue(roof), "at night the house has its night texture, yellow (%06x)".format((roof ?: 0) and 0xFFFFFF))
+    val dayRoof = pixel(scene, roofAt[0], roofAt[1], roofAt[2])
+    check(dayRoof != null && red(dayRoof) > green(dayRoof) * 2, "by day its own red (%06x)".format((dayRoof ?: 0) and 0xFFFFFF))
+    val window = pixel(night, 768.0 + 19, 28.0, 256.0 + 96.3)
+    val wall = pixel(night, 768.0 - 14, 28.0, 256.0 + 96.3)
+    val dayWindow = pixel(scene, 768.0 + 19, 28.0, 256.0 + 96.3)
+    check(window != null && wall != null && luma(window) > luma(wall) + 40, "the lit window shines in the night (%06x, the wall %06x)".format((window ?: 0) and 0xFFFFFF, (wall ?: 0) and 0xFFFFFF))
+    check(window != null && dayWindow != null && red(window) - blue(window) > red(dayWindow) - blue(dayWindow) + 50,
+        "warm (%06x, by day %06x)".format((window ?: 0) and 0xFFFFFF, (dayWindow ?: 0) and 0xFFFFFF))
+    check(wall != null && luma(wall) < luma(0xF0D830) * 8 / 10, "while the walls are in the night's light")
+    val wp = night.project(768.0 + 19, 28.0, 256.0 + 96.3)
+    check(wp != null && (0 until night.glows.size / 4).any { k -> abs(night.glows[k * 4] - wp[0]) < 6 && abs(night.glows[k * 4 + 1] - wp[1]) < 6 }, "a glow round the window")
+    // the item ball the map keeps, in sight
+    check(scene.itemSpots.size == 1 && scene.itemSpots[0].gx == 36 && scene.itemSpots[0].gy == 11, "the map's item ball spot (${scene.itemSpots.map { "${it.gx},${it.gy}" }})")
+    check(FieldPeople.itemBalls(src, listOf(33)) == listOf(36 to 11) && FieldPeople.warps(src, listOf(33)) == listOf(48 to 21), "item balls and warps from the event file")
+}
+
+/** The game's field effects, and life on the map. */
+private fun effectsAndLife(src: CryArchive.Source, scene: FieldMap.Scene) {
+    // ---- the effects' pictures from the ROM ----
+    val art = FieldEffectArt.load(src)
+    check(art != null, "the field effects are read")
+    if (art == null) return
+    check(Emote.values().all { art.emote(it).size == 2 }, "every emote bubble, two frames each")
+    check(art.frames("shibuki").size == 3 && art.frames("hero_kemu").size == 4 && art.frames("ripple").size == 4 && art.frames("n_ripple").size == 4,
+        "splash, dust and ripples, frame by frame")
+    val kira = art.frames("seed_kira")
+    check(kira.size == 2 && kira[0].width == 16 && kira[0].height == 32, "sparkles, 16x32")
+    val ballArt = art.frames("monstarball")
+    check(ballArt.size == 1 && ballArt[0].width == 16, "the item ball, found though it isn't where the game keeps it")
+    val heart = art.emote(Emote.HEART)[0]
+    check(heart.top == 5 && heart.bottom == 25, "a bubble's top and point (${heart.top}, ${heart.bottom})")
+    val sandPrint = art.footprint(FollowerSprites.UP, false)
+    val snowPrint = art.footprint(FollowerSprites.LEFT, true)
+    check(sandPrint != null && snowPrint != null && sandPrint !== snowPrint && art.footprint(FollowerSprites.RIGHT, false) !== sandPrint, "footprints each way, in sand and in snow")
+    check(sandPrint!!.pixels.any { red(it) in 130..170 && it ushr 24 != 0 } && snowPrint!!.pixels.any { blue(it) > 220 && it ushr 24 != 0 }, "sand's brown, snow's white")
+
+    // ---- footprints and splashes ----
+    val fx = FieldEffects(scene, art, Random(3))
+    val sand = scene.tile(37, 16)
+    val puddle = scene.tile(37, 19)
+    val grass = scene.tile(44, 12)
+    check(sand?.behavior == FieldEffects.SAND && puddle?.behavior == FieldEffects.PUDDLE && grass?.tallGrass == true, "sand, a puddle and grass in sight")
+    if (sand == null || puddle == null || grass == null) return
+    val drawn = ArrayList<FieldEffects.Draw>()
+    fx.stepped(grass, FollowerSprites.UP, 1_000)
+    check(fx.all.isEmpty(), "nothing left in the grass")
+    fx.stepped(sand, FollowerSprites.UP, 1_000)
+    fx.ground(1_000, drawn)
+    check(fx.all.size == 1 && drawn.size == 1 && drawn[0].image === sandPrint && drawn[0].alpha == 1f, "a footprint in the sand")
+    val sp = scene.project(sand.x, sand.y, sand.z)!!
+    check(abs(drawn[0].left + drawn[0].width / 2 - sp[0]) < 2 && abs(drawn[0].top + drawn[0].height / 2 - sp[1]) < 2 &&
+        drawn[0].width in 15f..19f && drawn[0].height in 8f..16f, "flat on its tile (${drawn[0].left},${drawn[0].top} ${drawn[0].width}x${drawn[0].height})")
+    fx.ground(1_000 + FieldEffects.FOOTPRINT_MS - 1_500, drawn)
+    check(drawn.size == 1 && drawn[0].alpha in 0.3f..0.7f, "slowly fading (${drawn.firstOrNull()?.alpha})")
+    fx.ground(1_000 + FieldEffects.FOOTPRINT_MS, drawn)
+    check(drawn.isEmpty() && fx.all.isEmpty(), "and gone")
+    fx.stepped(sand, FollowerSprites.UP, 20_000)
+    fx.stepped(sand, FollowerSprites.DOWN, 20_300)
+    check(fx.all.size == 1 && fx.all[0].direction == FollowerSprites.DOWN, "a footprint trodden over")
+    for (k in 0 until 50) fx.stepped(FieldMap.Tile(37, 16 + k, sand.x, sand.y, sand.z + k * 16, FieldEffects.SAND), FollowerSprites.DOWN, 21_000L + k)
+    check(fx.all.count { it.kind == FieldEffects.Kind.FOOTPRINT } == FieldEffects.MAX_FOOTPRINTS, "no more than ${FieldEffects.MAX_FOOTPRINTS} footprints")
+    fx.ground(40_000, drawn)
+    // in a puddle: a splash and a ring
+    fx.stepped(puddle, FollowerSprites.DOWN, 50_000)
+    fx.air(50_050, drawn)
+    val shibuki = art.frames("shibuki")
+    check(drawn.size == 1 && drawn[0].image === shibuki[0], "a splash in the puddle")
+    val pp = scene.project(puddle.x, puddle.y, puddle.z)!!
+    check(abs(drawn[0].left + drawn[0].width / 2 - pp[0]) < 1 && drawn[0].top + shibuki[0].bottom in pp[1] - 2..pp[1] + 6, "round its feet")
+    fx.air(50_000 + FieldEffects.SPLASH_MS - 20, drawn)
+    check(drawn.size == 1 && drawn[0].image === shibuki[2], "rising, frame by frame")
+    fx.ground(50_100, drawn)
+    check(drawn.size == 1 && drawn[0].image === art.frames("ripple")[0], "and a ring spreading")
+    fx.ground(50_000 + FieldEffects.RIPPLE_MS - 10, drawn)
+    check(drawn.size == 1 && drawn[0].image === art.frames("ripple")[3] && drawn[0].alpha < 0.5f, "wider and fading")
+    // dust, sparkles
+    fx.dust(sand.x, sand.y, sand.z, 60_000)
+    fx.sparkles(sand.x, sand.y, sand.z, 32, 60_000)
+    fx.air(60_100, drawn)
+    check(drawn.count { it.image in art.frames("hero_kemu") } == 2, "two puffs of dust")
+    check(drawn.count { it.image in kira } == 1, "a sparkle, the next ones a moment after")
+    fx.air(60_300, drawn)
+    check(drawn.count { it.image in kira } == 3, "three sparkles")
+    // behind the house nothing shows
+    fx.stepped(FieldMap.Tile(47, 17, 47 * 16 + 8.0, 16.0, 17 * 16 + 8.0, FieldEffects.SAND), FollowerSprites.UP, 70_000)
+    fx.ground(70_000, drawn)
+    check(drawn.none { it.image === sandPrint }, "a footprint behind the house is hidden")
+    check(FieldEffects(scene, null).let { f -> f.stepped(sand, 0, 0); f.ground(0, drawn); drawn.isEmpty() }, "without the pictures, nothing is drawn")
+
+    // ---- emote bubbles ----
+    val emotes = Emotes()
+    val a = Any()
+    emotes.show(a, Emote.HEART, 1_000, 1_000)
+    check(emotes.at(a, 1_500)?.emote == Emote.HEART && emotes.at(a, 999) == null && emotes.at(a, 2_000) == null && emotes.at(Any(), 1_500) == null,
+        "a bubble shows for its time, over whoever it's for")
+    emotes.prune(3_000)
+    check(emotes.at(a, 1_500) == null, "and is forgotten once it's over")
+    check(Emotes.frame(0, 2) == 0 && Emotes.frame(320, 2) == 1 && Emotes.frame(640, 2) == 0 && Emotes.frame(500, 1) == 0, "its two pictures take turns")
+    check(Emotes.rise(0) == 4f && Emotes.rise(60) in 1.5f..2.5f && Emotes.rise(200) == 0f, "it pops up")
+
+    // ---- the walker's items ----
+    val image = ByteArray(0x10000)
+    for ((k, item) in listOf(17, 0, 155, 600).withIndex()) { image[0x8F8C + k * 2] = (item and 0xFF).toByte(); image[0x8F8D + k * 2] = (item shr 8).toByte() }
+    check(WalkParty.routeItems(image) == listOf(17, 155), "the walk's items (route info +0x8C), leaving out empty ones")
+    check(WalkParty.routeItems(ByteArray(10)).isEmpty() && WalkParty.fromImage(image).items == listOf(17, 155), "none without the route info")
+
+    // ---- the Pokémon: moods, eating, running, sleep, what it did ----
+    run {
+        val pk = MapWanderer(scene, Random(41))
+        var t = 0L
+        pk.update(t)
+        check(pk.canReach(scene.tile(40, 12)!!) && !pk.canReach(FieldMap.Tile(9999, 9999, 0.0, 0.0, 0.0)), "it knows where it can get to")
+        // resting, it sits down when it stops
+        pk.mood = -1
+        val at0 = pk.at
+        pk.placeAt(at0)
+        t += MapWanderer.SIT_AFTER_MS + 600
+        check(pk.pose(t).sink == 2, "resting, it sits down (${pk.pose(t).sink})")
+        pk.mood = 0
+        check(pk.pose(t).sink == 0, "otherwise it stands")
+        // eating: little bobs
+        pk.nibble(t, 1_000)
+        check(pk.pose(t + 160).hop in 1.0..2.6 && pk.pose(t + 1_100).hop == 0.0, "eating, it bobs")
+        // running
+        val far = scene.tiles.values.filter { abs(it.gx - pk.at.gx) + abs(it.gy - pk.at.gy) in 5..7 }.firstOrNull { pk.canReach(it) }
+        check(far != null, "somewhere to run to")
+        if (far != null) {
+            pk.rush(t + 10_000)
+            check(pk.goTo(far, t), "it's sent there")
+            val start = t
+            while (t < start + 10_000 && (pk.at !== far || !pk.idle)) { t += 10; pk.update(t) }
+            val steps = abs(far.gx - at0.gx) + abs(far.gy - at0.gy)
+            check(pk.at === far && t - start <= steps * MapWanderer.RUN_MS + 400, "running, a step takes ${MapWanderer.RUN_MS} ms (${t - start} ms for $steps+ steps)")
+        }
+        pk.rush(Long.MIN_VALUE)
+        // asleep: it lies facing the front and stays put
+        pk.asleep = true
+        val sleepAt = pk.at
+        check(pk.facing == FollowerSprites.DOWN, "falling asleep it faces the front")
+        var moved = false
+        var sinks = HashSet<Int>()
+        repeat(600) { t += 100; pk.update(t); if (pk.at !== sleepAt || pk.next != null) moved = true; sinks.add(pk.pose(t).sink); check(pk.pose(t).frame == 0, "asleep, no stepping in place") }
+        check(!moved && sinks == setOf(3, 4), "asleep it doesn't go anywhere, lying down, breathing ($sinks)")
+        pk.asleep = false
+        repeat(300) { t += 100; pk.update(t); if (pk.at !== sleepAt) moved = true }
+        check(moved, "awake again, it goes about")
+        // what it did, for the map to show
+        val explorer = MapWanderer(scene, Random(42))
+        var te = 0L
+        val seen = HashSet<MapWanderer.Happening>()
+        while (te < 900_000) { explorer.update(te); seen.addAll(explorer.happenings); explorer.happenings.clear(); te += 100 }
+        check(seen == MapWanderer.Happening.values().toSet(), "it sniffs, reads and lands from jumps ($seen)")
+        val left = MapWanderer(scene, Random(42))
+        var tl = 0L
+        while (tl < 900_000) { left.update(tl); tl += 100 }
+        check(left.happenings.size in 1..32, "left untaken, they don't pile up (${left.happenings.size})")
+        // drawn sitting: lowered, its feet hidden, with its shadow
+        val sprite = FollowerSprites.load(src, 25, 0, false, false)!!
+        val painter = MapSpritePainter(scene, sprite)
+        val spot = scene.tile(40, 12)!!
+        painter.paint(MapWanderer.Pose(spot.x, spot.y, spot.z, FollowerSprites.DOWN, 0, 0.0, false))
+        val standing = painter.buffer.count { it ushr 24 == 0xFF }
+        val standTop = painter.spriteTop
+        painter.paint(MapWanderer.Pose(spot.x, spot.y, spot.z, FollowerSprites.DOWN, 0, 0.0, false, sink = 3))
+        check(painter.buffer.count { it ushr 24 == 0xFF } in standing / 2 until standing && painter.spriteTop == standTop + 3 && painter.buffer.any { it == 0x48000000 },
+            "sitting it's lower, its feet hidden, its shadow there")
+        // the one following, asleep
+        val buddy = MapBuddy(scene, scene.tile(38, 12)!!)
+        buddy.asleep = true
+        val leader = MapWanderer(scene, Random(43))
+        var tb = 0L
+        val bAt = buddy.at
+        repeat(300) { tb += 100; leader.update(tb); buddy.update(tb, leader) }
+        check(buddy.at === bAt && buddy.pose(tb).sink >= 3 && buddy.pose(tb).facing == FollowerSprites.DOWN, "the one following sleeps where it is")
+    }
+
+    // ---- life on the map ----
+    val people = scene.people
+    class Life(val l: MapLife, val pk: MapWanderer, val crowd: MapCrowd, val g: MapGames?) {
+        var now = 1_000_000L
+        /** Moves everything on [ms], calling [each] with the time after every step. */
+        fun run(ms: Long, minute: Int, each: (Long) -> Unit = {}) {
+            val until = now + ms
+            while (now < until) {
+                pk.update(now)
+                crowd.update(now, pk.at, pk.next, pk.facing, pk.idle, l.tiles())
+                g?.update(now)
+                l.update(now, minute)
+                crowd.popped.clear()
+                each(now)
+                now += 40
+            }
+        }
+    }
+    fun life(seed: Int, minute: Int = 12 * 60, games: Boolean = false, body: Life.() -> Unit) {
+        val crowd = MapCrowd(scene, people, Random(seed))
+        val pk = MapWanderer(scene, Random(seed + 1))
+        val effects = FieldEffects(scene, art, Random(seed + 2))
+        val l = MapLife(scene, pk, crowd, effects, Emotes(), Random(seed + 3))
+        val g = if (games) MapGames(scene, pk, crowd, Random(seed + 4)) else null
+        l.games = g
+        pk.blocked = { gx, gy -> crowd.occupied(gx, gy) || l.blocks(gx, gy) }
+        l.free = { tile -> !crowd.occupied(tile.gx, tile.gy) }
+        Life(l, pk, crowd, g).body()
+    }
+    val noon = 12 * 60
+    val night = 22 * 60
+    // an item ball turns up where the map keeps one, glints, and is fetched
+    life(51) {
+        l.items = intArrayOf(17, 155)
+        pk.placeAt(scene.tile(40, 12)!!)
+        pk.held = true
+        val t0 = now
+        var shownAt = -1L
+        var glints = 0
+        run(45_000, noon) { t ->
+            if (l.ball != null && shownAt < 0) shownAt = t - t0
+            glints = maxOf(glints, l.effects.all.count { it.kind == FieldEffects.Kind.SPARKLE })
+        }
+        val ball = l.ball
+        check(shownAt in 19_000..41_000 && ball != null, "an item ball turns up after a while ($shownAt ms)")
+        if (ball == null) return@life
+        check(ball.tile.gx == 36 && ball.tile.gy == 11 && ball.item in listOf(17, 155), "where the map keeps one, with one of the walk's items (${ball.tile.gx},${ball.tile.gy}: ${ball.item})")
+        check(glints >= 1 && l.blocks(36, 11), "glinting, and nobody steps on it")
+        check(ball.spottedAt == Long.MIN_VALUE, "held, the Pokémon doesn't go for it")
+        pk.held = false
+        var exclaimed = false
+        var onBall = 0
+        var found: MapGames.Line? = null
+        run(30_000, noon) { t ->
+            if (l.emotes.at(pk, t)?.emote == Emote.EXCLAIM) exclaimed = true
+            if (l.ball != null && pk.at.gx == 36 && pk.at.gy == 11) onBall++
+            if (found == null) found = l.lines.firstOrNull { it.what == MapGames.What.ITEM_FOUND }
+        }
+        check(exclaimed && ball.spottedAt != Long.MIN_VALUE, "it spots it: \"!\"")
+        check(found != null && found!!.n == ball.item && l.ball == null, "goes over and picks it up ($found)")
+        check(onBall == 0, "without walking onto it")
+    }
+    // with none of its own, everyday items; one nobody spots goes again
+    life(52) {
+        pk.held = true
+        run(45_000, noon)
+        val ball = l.ball
+        check(ball != null && ball.item in MapLife.COMMON_ITEMS, "with no items of the walk's own: everyday ones (${ball?.item})")
+        run(MapLife.BALL_MS + 1_000, noon)
+        check(l.ball !== ball, "one nobody spots goes again")
+    }
+    // a berry tossed: it runs over and eats it
+    life(53) {
+        pk.placeAt(scene.tile(40, 12)!!)
+        run(1_000, noon)
+        val spot = scene.tile(43, 12)!!
+        check(l.toss(spot, 192f, 224f, now), "a berry is tossed")
+        check(!l.toss(spot, 192f, 224f, now + 100), "one at a time")
+        val treat = l.treat!!
+        check(treat.tile === spot && l.blocks(43, 12), "it lands where it was thrown")
+        var exclaimed = false
+        val steps = ArrayList<Long>()
+        var lastAt = pk.at
+        var nibbles = 0
+        var eaten: MapGames.Line? = null
+        var heart = false
+        run(12_000, noon) { t ->
+            if (l.emotes.at(pk, t)?.emote == Emote.EXCLAIM) exclaimed = true
+            if (pk.at !== lastAt) { if (t > treat.landsAt && treat.eatenAt == Long.MIN_VALUE) steps.add(t); lastAt = pk.at }
+            if (treat.eatenAt != Long.MIN_VALUE && pk.pose(t).hop in 0.5..2.6) nibbles++
+            if (eaten == null) eaten = l.lines.firstOrNull { it.what == MapGames.What.TREAT_EATEN }
+            if (eaten != null && l.emotes.at(pk, t)?.emote == Emote.HEART) heart = true
+        }
+        check(exclaimed, "it sees it land: \"!\"")
+        // (the step it was on when the berry landed it finishes at its own pace)
+        check(steps.size >= 3 && steps.zipWithNext().drop(1).all { (x, y) -> y - x <= MapWanderer.RUN_MS + 50 }, "it runs over (${steps.zipWithNext().map { it.second - it.first }} ms a step)")
+        check(nibbles > 5 && eaten != null && eaten!!.n == treat.kind && l.treat == null, "eats it, nibbling ($nibbles, $eaten)")
+        check(heart && l.cries.contains(MapLife.OWN_CRY), "and loves it: a heart and a happy cry")
+        // thrown at the water: it lands on the ground nearest
+        val water = scene.water.values.first { scene.tile(it.gx, it.gy) == null }
+        check(l.toss(water, 192f, 224f, now) && l.treat?.tile?.let { scene.tile(it.gx, it.gy) != null } == true, "thrown at the water, it lands on the shore")
+        run(15_000, noon)
+        check(l.treat == null, "and is eaten too")
+        val from = pk.at
+        check(l.tossNear(192f, 224f, now) && l.treat!!.tile.let { abs(it.gx - from.gx) + abs(it.gy - from.gy) in 2..4 }, "tossed from the menu: a few steps away")
+    }
+    life(54, games = true) {
+        run(500, noon)
+        g!!.fishKinds = listOf(MapCrowd.WildKind(FollowerSprites.spriteFor(129, 0, false), 129, true))
+        check(g.start(MapGames.Game.FISHING, now), "a game starts")
+        check(!l.toss(scene.tile(43, 12)!!, 0f, 0f, now), "no berries while a game is on")
+    }
+    // at night, left alone, it falls asleep; it wakes when tapped or when there are new steps
+    life(55) {
+        val buddy = MapBuddy(scene, listOf(0 to 1, 1 to 0, -1 to 0, 0 to -1).mapNotNull { (dx, dy) -> scene.tile(pk.at.gx + dx, pk.at.gy + dy) }.first())
+        l.buddy = buddy
+        val t0 = now
+        var asleepAt = -1L
+        run(40_000, night) { t -> buddy.update(t, pk); if (l.asleep && asleepAt < 0) asleepAt = t - t0 }
+        check(asleepAt in 29_000..36_000, "at night, left alone half a minute, it falls asleep ($asleepAt ms)")
+        val at = pk.at
+        var moved = false
+        var zz = 0
+        var buddyZz = 0
+        run(60_000, night) { t ->
+            if (pk.at !== at) moved = true
+            if (l.emotes.at(pk, t)?.emote == Emote.SLEEP) zz++
+            if (l.emotes.at(buddy, t)?.emote == Emote.SLEEP) buddyZz++
+        }
+        check(!moved && l.asleep && pk.asleep && pk.pose(now).facing == FollowerSprites.DOWN && pk.pose(now).sink >= 3, "and sleeps where it is, lying down")
+        check(zz > 1_400 && buddyZz > 1_000 && buddy.asleep, "\"Zz\" over it, and over the one following ($zz, $buddyZz)")
+        l.interacted(now)
+        check(!l.asleep && !pk.asleep && !buddy.asleep && l.emotes.at(pk, now + 50)?.emote == Emote.EXCLAIM, "a tap wakes it: \"!\"")
+        val t1 = now
+        var again = -1L
+        run(40_000, night) { t -> if (l.asleep && again < 0) again = t - t1 }
+        check(again in 29_000..36_000, "left alone again, it goes back to sleep ($again)")
+        l.setSteps(1_000, 500, 10_000, now)
+        check(l.asleep, "the steps there were don't wake it")
+        l.setSteps(1_050, 550, 10_000, now + 1_000)
+        check(!l.asleep, "new steps do")
+    }
+    life(57) {
+        var slept = false
+        run(120_000, noon) { if (l.asleep) slept = true }
+        check(!slept, "by day it doesn't sleep")
+    }
+    life(58, games = true) {
+        run(500, night)
+        g!!.fishKinds = listOf(MapCrowd.WildKind(FollowerSprites.spriteFor(129, 0, false), 129, true))
+        check(g.start(MapGames.Game.FISHING, now), "fishing at night")
+        var slept = false
+        run(24_000, night) { if (l.asleep) slept = true }
+        check(!slept, "nor while playing a game")
+    }
+    // its mood follows today's steps
+    life(59) {
+        l.setSteps(20_000, 12_000, 10_000, now)
+        run(200, noon)
+        check(l.mood == 2 && pk.pace == 240L && pk.mood == 2, "lots of steps today: very lively, quick steps (${l.mood}, ${pk.pace})")
+        l.setSteps(20_001, 6_000, 10_000, now)
+        run(200, noon)
+        check(l.mood == 1 && pk.pace == 265L, "a good few: lively")
+        l.setSteps(20_002, 100, 10_000, now)
+        run(200, noon)
+        check(l.mood == 0 && pk.pace == MapWanderer.STEP_MS, "a few: as usual")
+        var sat = 0
+        run(MapLife.REST_AFTER_MS + 30_000, noon) { t -> if (pk.pose(t).sink == 2) sat++ }
+        check(l.mood == -1 && pk.pace == 380L && sat > 100, "no steps for a while: it rests, sitting down ($sat)")
+        l.setSteps(20_100, 200, 10_000, now)
+        run(200, noon)
+        check(l.mood == 0, "new steps get it going again")
+    }
+    // birds fly over, a Magikarp leaps out of the water, a shiny one sparkles
+    life(60) {
+        l.birds = listOf(MapCrowd.WildKind(FollowerSprites.spriteFor(16, 0, false), 16, false))
+        l.magikarp = MapCrowd.WildKind(FollowerSprites.spriteFor(129, 0, false), 129, true)
+        l.shiny = true
+        val t0 = now
+        var birdAt = -1L
+        var leapAt = -1L
+        var aloft = true
+        val xs = ArrayList<Float>()
+        var leapTile: FieldMap.Tile? = null
+        var sparkles = 0
+        var splashes = 0
+        run(30_000, noon) { t ->
+            val fl = l.flyers.firstOrNull()
+            if (fl != null) {
+                if (birdAt < 0) birdAt = t - t0
+                val p = fl.pose(t)
+                if (p != null && birdAt >= 0 && xs.size < 400) {
+                    if (!p.aloft || p.hop < 30.0) aloft = false
+                    if (t - t0 - birdAt < fl.ms - 100) scene.project(p.x, p.y, p.z)?.let { xs.add(it[0]) }
+                }
+            }
+            if (l.leap != null && leapAt < 0) { leapAt = t - t0; leapTile = l.leap!!.tile }
+            splashes = maxOf(splashes, l.effects.all.count { it.kind == FieldEffects.Kind.SPLASH })
+            if (t - t0 < 12_000) sparkles = maxOf(sparkles, l.effects.all.count { it.kind == FieldEffects.Kind.SPARKLE })
+        }
+        check(birdAt in 11_000..28_000, "a bird flies over ($birdAt ms)")
+        check(aloft && xs.size > 20 && (xs.first() < 0f || xs.first() > scene.width) && xs.zipWithNext().all { (x, y) -> (y - x) * (xs.last() - xs.first()) >= 0 },
+            "high up, from beyond one side across (${xs.firstOrNull()} -> ${xs.lastOrNull()})")
+        check(leapAt in 7_000..24_000 && leapTile?.let { scene.tile(it.gx, it.gy) == null && scene.water.containsKey(FieldMap.Scene.key(it.gx, it.gy)) } == true,
+            "a Magikarp leaps out of the water ($leapAt ms)")
+        check(splashes >= 1, "with a splash")
+        check(sparkles >= 2, "a shiny Pokémon sparkles now and then ($sparkles)")
+    }
+    life(61) {
+        var sparkles = 0
+        run(15_000, noon) { sparkles = maxOf(sparkles, l.effects.all.count { it.kind == FieldEffects.Kind.SPARKLE }) }
+        check(sparkles == 0 && l.flyers.isEmpty() && l.leap == null, "a plain one doesn't, and with no birds or fish none come")
+    }
+    // emote bubbles: people, the Pokémon spotting things
+    life(62) {
+        val man = crowd.walkers.first { it.person.trainer }
+        pk.placeAt(scene.tile(40, 22)!!)
+        pk.held = true
+        var spotted = false
+        run(200, noon) { t -> if (l.emotes.at(man, t)?.emote == Emote.EXCLAIM) spotted = true }
+        check(spotted, "a trainer spots it in front of him: \"!\"")
+        var again = 0
+        val from = now
+        run(10_000, noon) { t -> if (t > from + 2_000 && l.emotes.at(man, t) != null) again++ }
+        check(again == 0, "just the once")
+        pk.held = false
+        pk.placeAt(scene.tile(39, 20)!!)
+        pk.walk(FollowerSprites.RIGHT, false, now)
+        var greeted: Emote? = null
+        run(1_000, noon) { t -> if (greeted == null) greeted = l.emotes.at(man, t)?.emote }
+        check(greeted == Emote.EXCLAIM, "walking up to him, he turns to it with a \"!\" (${greeted})")
+        // a wild Pokémon pops out close by: it notices
+        pk.placeAt(scene.tile(44, 14)!!)
+        pk.held = true
+        run(2_000, noon)
+        crowd.popped.add(scene.tile(46, 14)!! to true)
+        l.update(now, noon)
+        check(l.emotes.at(pk, now)?.emote == Emote.EXCLAIM && pk.facing == FollowerSprites.RIGHT, "a wild Pokémon pops out near it: it turns to look, \"!\"")
+        // tapped: happy; the step goal reached: hearts and hops; at a door: it peeks in
+        l.patted(now + 1_000)
+        check(l.emotes.at(pk, now + 1_000)?.emote in setOf(Emote.HEART, Emote.SMILE, Emote.HAPPY, Emote.NOTE, Emote.GLAD), "tapped, it's happy")
+        l.celebrate(now + 2_000)
+        check(l.emotes.at(pk, now + 2_500)?.emote == Emote.HEART && pk.pose(now + 2_100).hop > 3.0, "the step goal reached: a heart and a hop")
+        l.update(now + 2_500, noon)
+        check(pk.pose(now + 2_600).hop > 3.0, "and another")
+        l.atDoor(now + 6_000)
+        check(l.emotes.at(pk, now + 6_100) == null, "at a door it waits a moment")
+        check(l.emotes.at(pk, now + 6_600)?.emote in setOf(Emote.QUESTION, Emote.NOTE, Emote.SILENT, Emote.EXCLAIM), "then peeks in")
+    }
+    // how the games go shows on its face; what it does too
+    life(63, games = true) {
+        run(500, noon)
+        g!!.announce(MapGames.Line(MapGames.What.FISH_CAUGHT, 129, 30), now)
+        check(g.lineAt(now + 100)?.what == MapGames.What.FISH_CAUGHT && g.lineAt(now + 6_000) == null, "something to say shows a while")
+        l.update(now + 40, noon)
+        check(l.emotes.at(pk, now + 100)?.emote == Emote.HAPPY, "a catch: it's delighted")
+        g.announce(MapGames.Line(MapGames.What.TAG_AWAY, 16), now + 200)
+        l.update(now + 240, noon)
+        check(l.emotes.at(pk, now + 300)?.emote == Emote.SAD, "one that got away: sad")
+        val seen = HashSet<Emote>()
+        var dust = 0
+        run(900_000, noon) { t ->
+            l.emotes.at(pk, t)?.let { seen.add(it.emote) }
+            dust = maxOf(dust, l.effects.all.count { it.kind == FieldEffects.Kind.DUST })
+        }
+        check(Emote.QUESTION in seen && Emote.SILENT in seen && dust > 0, "sniffing \"?\", reading \"...\", dust landing from a jump ($seen, $dust)")
+        check(pk.happenings.isEmpty(), "what it did is taken each time")
+    }
 }

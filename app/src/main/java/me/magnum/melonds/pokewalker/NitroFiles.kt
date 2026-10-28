@@ -389,7 +389,7 @@ object Nitro {
     }
 
     /** Rows of a 3x3 matrix given as "pivot + two values" (apicula's nitro/rotation.rs). */
-    private fun pivot(select: Int, neg: Int, a: Double, b: Double): DoubleArray {
+    internal fun pivot(select: Int, neg: Int, a: Double, b: Double): DoubleArray {
         val o = if (neg and 1 == 0) 1.0 else -1.0
         val c = if (neg and 2 == 0) b else -b
         val d = if (neg and 4 == 0) a else -a
@@ -494,9 +494,12 @@ object Nitro {
     /**
      * The triangles of [model] placed by [place] (world = place x model). Textures come from
      * [texSets] (the first that has the material's texture); a vertex-coloured or lit model gets
-     * its colours from [lighting].
+     * its colours from [lighting]. An animation can stand in for the model's own node matrices
+     * ([nodes], by node number) and swap materials' textures ([textures]: material name ->
+     * texture name and palette name).
      */
-    fun buildMesh(model: Model, place: DoubleArray, texSets: List<TexSet>, lighting: Lighting?, out: MutableList<Batch>) {
+    fun buildMesh(model: Model, place: DoubleArray, texSets: List<TexSet>, lighting: Lighting?, out: MutableList<Batch>,
+                  nodes: List<DoubleArray>? = null, textures: Map<String, Pair<String, String?>>? = null) {
         val stack = Array(32) { Mat4.identity() }
         var cur = Mat4.identity()
         var mat: Material? = null
@@ -505,7 +508,7 @@ object Nitro {
             when (op.kind) {
                 Op.LOAD -> cur = stack[op.a and 31].copyOf()
                 Op.STORE -> stack[op.a and 31] = cur.copyOf()
-                Op.MUL_NODE -> model.nodes.getOrNull(op.a)?.let { cur = Mat4.mul(cur, it) }
+                Op.MUL_NODE -> (nodes?.getOrNull(op.a) ?: model.nodes.getOrNull(op.a))?.let { cur = Mat4.mul(cur, it) }
                 Op.SCALE_UP -> { cur = Mat4.mul(cur, Mat4.scale(model.upScale, model.upScale, model.upScale)); scaled = true }
                 Op.SCALE_DOWN -> cur = Mat4.mul(cur, Mat4.scale(model.downScale, model.downScale, model.downScale))
                 Op.SKIN -> {
@@ -529,7 +532,8 @@ object Nitro {
                     // a model that never scales itself up still has its vertices in posScale units
                     val world = if (!scaled && model.upScale != 1.0) Mat4.mul(place, Mat4.mul(cur, Mat4.scale(model.upScale, model.upScale, model.upScale)))
                                 else Mat4.mul(place, cur)
-                    runPiece(piece.cmds, world, stack, place, m, texSets, lighting, out)
+                    val swapped = textures?.get(m.name)
+                    runPiece(piece.cmds, world, stack, place, m, texSets, lighting, out, swapped)
                 }
             }
         }
@@ -538,11 +542,14 @@ object Nitro {
     private fun rgb(c: Int) = doubleArrayOf((c and 31) / 31.0, ((c ushr 5) and 31) / 31.0, ((c ushr 10) and 31) / 31.0)
 
     private fun runPiece(cmds: ByteArray, startWorld: DoubleArray, stack: Array<DoubleArray>, place: DoubleArray, mat: Material,
-                         texSets: List<TexSet>, lighting: Lighting?, out: MutableList<Batch>) {
-        val image = texSets.firstNotNullOfOrNull { it.image(mat.texName, mat.palName, mat.teximage) }
+                         texSets: List<TexSet>, lighting: Lighting?, out: MutableList<Batch>, swapped: Pair<String, String?>? = null) {
+        val texName = swapped?.first ?: mat.texName
+        val palName = swapped?.second ?: mat.palName
+        val image = texSets.firstNotNullOfOrNull { it.image(texName, palName, mat.teximage) }
+            ?: if (swapped != null) texSets.firstNotNullOfOrNull { it.image(mat.texName, mat.palName, mat.teximage) } else null
         val batch = Batch(image, mat.alpha, mat.drawBack, mat.drawFront, mat.mode)
         batch.materialName = mat.name
-        batch.textureName = mat.texName
+        batch.textureName = texName
         var world = startWorld
         val tw = (image?.width ?: mat.width).coerceAtLeast(1)
         val th = (image?.height ?: mat.height).coerceAtLeast(1)

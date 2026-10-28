@@ -149,6 +149,49 @@ object FieldPeople {
         return out
     }
 
+    /** The game's item ball sprite (SPRITE_MONSTARBALL). */
+    const val ITEM_BALL_SPRITE = 87
+
+    /** Where the maps in [maps] have item balls (x, z), hidden or not. */
+    fun itemBalls(src: CryArchive.Source, maps: Collection<Int>): List<Pair<Int, Int>> {
+        val narc = Nitro.narc(src, ZONE_EVENTS) ?: return emptyList()
+        val out = ArrayList<Pair<Int, Int>>()
+        val banks = HashSet<Int>()
+        for (map in maps) {
+            val bank = eventsBank(map)
+            if (bank < 0 || bank >= narc.count || !banks.add(bank)) continue
+            val objects = runCatching { readObjects(narc.read(bank)) }.getOrNull() ?: continue
+            for (o in objects) if (o.sprite == ITEM_BALL_SPRITE) out.add(o.x to o.z)
+        }
+        return out
+    }
+
+    /** The maps' warps (doors, cave mouths): their tiles (x, z), after the objects in each event file. */
+    fun warps(src: CryArchive.Source, maps: Collection<Int>): List<Pair<Int, Int>> {
+        val narc = Nitro.narc(src, ZONE_EVENTS) ?: return emptyList()
+        val out = ArrayList<Pair<Int, Int>>()
+        val banks = HashSet<Int>()
+        for (map in maps) {
+            val bank = eventsBank(map)
+            if (bank < 0 || bank >= narc.count || !banks.add(bank)) continue
+            val b = runCatching { narc.read(bank) }.getOrNull() ?: continue
+            if (b.size < 4) continue
+            val bgs = Nitro.s32(b, 0)
+            if (bgs < 0 || bgs > 4096) continue
+            var p = 4 + bgs * 20
+            if (p + 4 > b.size) continue
+            val objects = Nitro.s32(b, p)
+            if (objects < 0 || objects > 1024) continue
+            p += 4 + objects * 32
+            if (p + 4 > b.size) continue
+            val n = Nitro.s32(b, p)
+            p += 4
+            if (n < 0 || n > 1024 || p + n * 12 > b.size) continue
+            for (i in 0 until n) out.add(Nitro.u16(b, p + i * 12) to Nitro.u16(b, p + i * 12 + 2))
+        }
+        return out
+    }
+
     /** Someone a map always has, with a sprite that's a person or a Pokémon (not a sign, tree or rock). */
     class Spot(val event: ObjectEvent, val model: Int)
 

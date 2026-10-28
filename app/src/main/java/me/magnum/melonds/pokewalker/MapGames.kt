@@ -26,6 +26,8 @@ class MapGames(
         CONTEST_ON, CONTEST_CAUGHT, CONTEST_END, CONTEST_NONE,
         UNOWN_ON, UNOWN_FOUND, UNOWN_DONE,
         BERRY_PLANTED, BERRY_GROWING, BERRY_PICKED, BERRY_NOWHERE,
+        /** From [MapLife]: an item ball picked up ([Line.n]: the item), a berry eaten ([Line.n]: which), one it couldn't get to. */
+        ITEM_FOUND, TREAT_EATEN, TREAT_NOWHERE,
     }
 
     /** Something to tell the player: [what], about [species] (0: none), with numbers [n] and [m] and a [word]. */
@@ -141,6 +143,11 @@ class MapGames(
 
     /** What to show now (null: nothing). */
     fun lineAt(now: Long): Line? = if (game != null || now < lineUntil) line else null
+
+    /** Shows [l] for [ms] (something that happened on the map besides the games). */
+    fun announce(l: Line, now: Long, ms: Long = 5_000) {
+        if (game == null) say(l, now, ms)
+    }
 
     /** Starts [g] (stopping whatever was going on); false when it can't be played here. */
     fun start(g: Game, now: Long): Boolean {
@@ -561,5 +568,27 @@ object BerryArt {
             if (e <= 1.0 && px[(28 + y) * 32 + 16 + x] == 0) put(16 + x, 28 + y, if (e > 0.6 || (x + y) % 3 == 0) SOIL_DARK else SOIL)
         }
         return FollowerSprites.Sprite(arrayOf(px), 32, 1)
+    }
+
+    /** A berry tossed for the Pokémon to eat: one berry of [kind] with a leaf, 16x16. Our own art. */
+    fun treat(kind: Int): FollowerSprites.Sprite {
+        val px = IntArray(16 * 16)
+        fun put(x: Int, y: Int, c: Int) { if (x in 0 until 16 && y in 0 until 16) px[y * 16 + x] = c }
+        val k = kind.coerceIn(0, BERRY.size - 1)
+        val cx = 8
+        val cy = 11
+        for (y in -3..3) for (x in -3..3) if (x * x + y * y <= 10) put(cx + x, cy + y, BERRY[k])
+        put(cx, cy - 4, STEM)
+        put(cx + 1, cy - 5, LEAF); put(cx + 2, cy - 5, LEAF); put(cx + 2, cy - 6, LEAF); put(cx + 3, cy - 6, LEAF)
+        // a dark edge so it reads on any ground, and a shine
+        val copy = px.copyOf()
+        for (y in 0 until 16) for (x in 0 until 16) {
+            if (copy[y * 16 + x] != 0) continue
+            val near = listOf(x - 1 to y, x + 1 to y, x to y - 1, x to y + 1).any { (a, b) -> a in 0 until 16 && b in 0 until 16 && copy[b * 16 + a] != 0 }
+            if (near) px[y * 16 + x] = OUTLINE
+        }
+        put(cx - 1, cy - 1, 0xFFFFFFFF.toInt())
+        put(cx - 2, cy - 1, 0xFFFFFFFF.toInt())
+        return FollowerSprites.Sprite(arrayOf(px), 16, 1)
     }
 }

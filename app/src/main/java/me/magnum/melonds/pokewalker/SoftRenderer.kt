@@ -21,6 +21,9 @@ class SoftRenderer(val width: Int, val height: Int) {
     /** world -> clip space (column vectors). */
     var viewProj: DoubleArray = Mat4.identity()
 
+    /** When set, marks each pixel something was drawn on. */
+    var written: BooleanArray? = null
+
     /** Which winding faces the camera: Nitro models are counter-clockwise on screen from the front. */
     var frontIsClockwise = false
 
@@ -196,8 +199,10 @@ class SoftRenderer(val width: Int, val height: Int) {
                     if (alpha < 0.5f) continue
                     color[idx] = pack(r, g, bl, 1f)
                     depth[idx] = iw
+                    written?.set(idx, true)
                 } else {
                     if (alpha <= 0.01f) continue
+                    written?.set(idx, true)
                     val d = color[idx]
                     val dr = ((d ushr 16) and 0xFF) / 255f
                     val dg = ((d ushr 8) and 0xFF) / 255f
