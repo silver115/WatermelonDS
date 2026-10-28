@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "PokewalkerIR.h"
+#include "PwText.h"
 
 namespace
 {
@@ -48,6 +49,13 @@ JNIEXPORT void JNICALL
 Java_me_magnum_melonds_pokewalker_PokewalkerNative_note(JNIEnv* env, jobject, jstring text)
 {
     pokewalker::ir::Note(ToStd(env, text));
+}
+
+JNIEXPORT jstring JNICALL
+Java_me_magnum_melonds_pokewalker_PokewalkerNative_speciesName(JNIEnv* env, jobject, jint species)
+{
+    const char* name = species > 0 && species < 0x10000 ? pokewalker::SpeciesName(static_cast<u16>(species)) : "";
+    return env->NewStringUTF(name ? name : "");
 }
 
 JNIEXPORT jstring JNICALL

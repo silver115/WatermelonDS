@@ -404,6 +404,10 @@ object FieldMap {
         val water: Map<Long, Tile> = emptyMap(),
         /** The townsfolk and trainers standing in sight ([FieldPeople]). */
         val people: List<FieldPeople.Person> = emptyList(),
+        /** Ledges in sight, by [key]: the way they're jumped down (FollowerSprites.UP ... RIGHT). */
+        val ledges: Map<Long, Int> = emptyMap(),
+        /** Signs and other things to read in sight (tiles you face to read them), with ground beside them. */
+        val signs: List<Tile> = emptyList(),
     ) {
         fun tile(gx: Int, gy: Int): Tile? = tiles[key(gx, gy)]
 
@@ -745,8 +749,36 @@ object FieldMap {
             FieldPeople.place(ownPeople + others, tiles, waterTiles)
         }.getOrElse { log("No people: ${it.message}"); emptyList() }
         log("${people.size} people in sight")
+
+        // ledges to hop down (tile behaviours JUMP_EAST/WEST/NORTH/SOUTH, include/constants/metatile_behavior.h)
+        val ledges = HashMap<Long, Int>()
+        for (by in by0..by1) for (bx in bx0..bx1) {
+            val l = landAt(bx, by) ?: continue
+            for (y in 0 until 32) for (x in 0 until 32) {
+                val dir = when (l.behavior(x, y)) {
+                    0x38 -> FollowerSprites.RIGHT
+                    0x39 -> FollowerSprites.LEFT
+                    0x3A -> FollowerSprites.UP
+                    0x3B -> FollowerSprites.DOWN
+                    else -> continue
+                }
+                ledges[Scene.key(bx * 32 + x, by * 32 + y)] = dir
+            }
+        }
+        // things to read: the maps' bg events (not hidden items) with ground in sight beside them
+        val signs = runCatching { FieldPeople.signs(src, mapsInSight) }.getOrDefault(emptyList()).mapNotNull { (gx, gy) ->
+            if (Scene.key(gx, gy) in tiles) return@mapNotNull null
+            val beside = listOf(gx to gy + 1, gx - 1 to gy, gx + 1 to gy, gx to gy - 1).any { (x, y) -> Scene.key(x, y) in tiles }
+            if (!beside) return@mapNotNull null
+            val bx = Math.floorDiv(gx, 32)
+            val by = Math.floorDiv(gy, 32)
+            if (landAt(bx, by) == null) return@mapNotNull null
+            val gh = groundY(gx, gy) ?: listOf(gx to gy + 1, gx - 1 to gy, gx + 1 to gy).firstNotNullOfOrNull { (x, y) -> tiles[Scene.key(x, y)]?.y } ?: return@mapNotNull null
+            Tile(gx, gy, gx * TILE + TILE / 2, gh, gy * TILE + TILE / 2)
+        }.distinctBy { Scene.key(it.gx, it.gy) }
+        log("${ledges.size} ledge tiles, ${signs.size} things to read")
         return Scene(course, width, height, r.color, r.depth, viewProj, tiles, TILE.toFloat(), start, lightKey(minute, lightType),
-            animation, water.toFloatArray(), followsTheDay(lightType), waterTiles, people)
+            animation, water.toFloatArray(), followsTheDay(lightType), waterTiles, people, ledges, signs)
     }
 
     /** Whether two neighbouring tiles are a step apart (not a cliff). */

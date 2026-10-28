@@ -128,14 +128,47 @@ data class WalkingPokemon(val species: Int, val form: Int, val female: Boolean, 
          * then at +0x0D its form (bits 0-4) and gender (bits 5-6, 1 = female), at +0x0E bit 1
          * shiny (how HG/SS fills it in overlay 112).
          */
-        fun fromImage(image: ByteArray?): WalkingPokemon? {
-            val o = 0x8F00
-            if (image == null || image.size < o + 0x10) return null
+        fun fromImage(image: ByteArray?): WalkingPokemon? = fromSummary(image, 0x8F00)
+
+        /** A 16-byte Pokémon summary (picowalker-core's pokemon_summary_t) at [o]; null when there's none. */
+        fun fromSummary(image: ByteArray?, o: Int): WalkingPokemon? {
+            if (image == null || o < 0 || image.size < o + 0x10) return null
             val species = (image[o].toInt() and 0xFF) or ((image[o + 1].toInt() and 0xFF) shl 8)
             if (species !in 1..493) return null
             val v = image[o + 0x0D].toInt() and 0xFF
             val f = image[o + 0x0E].toInt() and 0xFF
             return WalkingPokemon(species, v and 0x1F, (v shr 5) and 3 == 1, f and 0x02 != 0)
         }
+
+        /** The course's three Pokémon you can find on the walk (route info +0x52, three summaries). */
+        fun routePokemon(image: ByteArray?): List<WalkingPokemon> = (0 until 3).mapNotNull { fromSummary(image, 0x8F52 + it * 0x10) }
+
+        /** The Pokémon caught on this walk so far (0xCE8C, three summaries; empty slots have no species). */
+        fun caught(image: ByteArray?): List<WalkingPokemon> = (0 until 3).mapNotNull { fromSummary(image, 0xCE8C + it * 0x10) }
+    }
+}
+
+/**
+ * Pokémon types from the player's own ROM: the personal data (`a/0/0/2`,
+ * poketool/personal/personal.narc), a member a species, type 1 and 2 at bytes 6 and 7.
+ */
+object PokemonTypes {
+    const val PERSONAL = "a/0/0/2"
+    const val FLYING = 2
+    const val BUG = 6
+    const val GHOST = 7
+    const val FIRE = 10
+    const val WATER = 11
+
+    /** The species' types (one or two); empty when the ROM doesn't say. */
+    fun of(src: CryArchive.Source, species: Int): Set<Int> {
+        val narc = Nitro.narc(src, PERSONAL) ?: return emptySet()
+        if (species !in 1..493 || species >= narc.count) return emptySet()
+        val b = runCatching { narc.read(species) }.getOrNull() ?: return emptySet()
+        if (b.size < 8) return emptySet()
+        val a = b[6].toInt() and 0xFF
+        val c = b[7].toInt() and 0xFF
+        if (a > 17 || c > 17) return emptySet()
+        return setOf(a, c)
     }
 }

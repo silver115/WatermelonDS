@@ -1,6 +1,8 @@
 package me.magnum.melonds.pokewalker
 
+import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.sin
 import kotlin.random.Random
 
 /**
@@ -118,7 +120,34 @@ object FieldPeople {
         val trainer: Boolean,
         /** Out in the water (swimmers): moves over water, no shadow. */
         val swimming: Boolean,
+        /** A wild Pokémon (of [species]) out of the grass for a while, not one of the map's people. */
+        val wild: Boolean = false,
+        val species: Int = 0,
     )
+
+    /**
+     * Where the maps in [maps] have things to read (signs, notices: bg events that aren't hidden
+     * items, type 2): their tiles (x, z).
+     */
+    fun signs(src: CryArchive.Source, maps: Collection<Int>): List<Pair<Int, Int>> {
+        val narc = Nitro.narc(src, ZONE_EVENTS) ?: return emptyList()
+        val out = ArrayList<Pair<Int, Int>>()
+        val banks = HashSet<Int>()
+        for (map in maps) {
+            val bank = eventsBank(map)
+            if (bank < 0 || bank >= narc.count || !banks.add(bank)) continue
+            val b = runCatching { narc.read(bank) }.getOrNull() ?: continue
+            if (b.size < 4) continue
+            val n = Nitro.s32(b, 0)
+            if (n < 0 || n > 4096 || 4 + n * 20 > b.size) continue
+            for (i in 0 until n) {
+                val o = 4 + i * 20
+                if (Nitro.u16(b, o + 2) == 2) continue
+                out.add(Nitro.s32(b, o + 4) to Nitro.s32(b, o + 8))
+            }
+        }
+        return out
+    }
 
     /** Someone a map always has, with a sprite that's a person or a Pokémon (not a sign, tree or rock). */
     class Spot(val event: ObjectEvent, val model: Int)
@@ -171,6 +200,9 @@ object FieldPeople {
  * types in overlay 5): standing still, turning to look around, or a step at a time back and forth
  * within the few tiles of home the map gives them. They never walk into each other or the
  * walking Pokémon, and when it comes up to someone and faces them, they turn to it as if talked to.
+ *
+ * Wild Pokémon of the route ([wildKinds]) come and go among them: out of the tall grass (in
+ * caves, anywhere on the floor; Water types in the water), a wander about, and back in.
  * Pure Kotlin, so it can be tested on its own.
  */
 class MapCrowd(val scene: FieldMap.Scene, people: List<FieldPeople.Person>, private val random: Random = Random.Default) {
@@ -178,6 +210,11 @@ class MapCrowd(val scene: FieldMap.Scene, people: List<FieldPeople.Person>, priv
     companion object {
         /** One tile's walk: the game's people walk a tile in 16 frames, a little over 260 ms. */
         const val STEP_MS = 280L
+        /** Running away (a game of tag). */
+        const val FLEE_STEP_MS = 230L
+        /** A wild Pokémon popping out, and diving back in. */
+        const val APPEAR_MS = 420L
+        const val LEAVE_MS = 450L
         private val DX = intArrayOf(0, 0, -1, 1) // UP, DOWN, LEFT, RIGHT
         private val DY = intArrayOf(-1, 1, 0, 0)
         private val VERTICAL = intArrayOf(FollowerSprites.UP, FollowerSprites.DOWN)
@@ -194,12 +231,16 @@ class MapCrowd(val scene: FieldMap.Scene, people: List<FieldPeople.Person>, priv
 
     enum class Kind { STILL, LOOK, WANDER }
 
+    /** A kind of wild Pokémon that can turn up: its sprite, its species and whether it lives in the water. */
+    class WildKind(val model: Int, val species: Int, val swims: Boolean)
+
     inner class Walker(val person: FieldPeople.Person) {
         var at: FieldMap.Tile = person.home
             internal set
         var next: FieldMap.Tile? = null
             internal set
         internal var stepStart = 0L
+        internal var stepMs = STEP_MS
         internal var steps = 0
         var facing: Int = when (person.movement) {
             in 14..17 -> person.movement - 14
@@ -210,6 +251,23 @@ class MapCrowd(val scene: FieldMap.Scene, people: List<FieldPeople.Person>, priv
         private val homeFacing = facing
         internal var waitUntil = 0L
         internal var talking = false
+
+        /** When a wild one popped out, and when it goes back. */
+        var bornAt = Long.MIN_VALUE
+            internal set
+        internal var leaveAt = Long.MAX_VALUE
+        /** When it started to go (Long.MAX_VALUE: it's staying). */
+        var leavingAt = Long.MAX_VALUE
+            internal set
+        /** Running away from the walking Pokémon. */
+        var flee = false
+        /** Drawn faint and flickering (an Unown in hiding). */
+        var faint = false
+        /** Stays where it popped out. */
+        var still = false
+
+        val wild get() = person.wild
+        val leaving get() = leavingAt != Long.MAX_VALUE
 
         val kind: Kind
         /** Directions they look or walk in. */
@@ -253,16 +311,32 @@ class MapCrowd(val scene: FieldMap.Scene, people: List<FieldPeople.Person>, priv
             var grass = at.tallGrass
             val n = next
             var frame = 0
+            val fourWay = person.wild.not()
             if (n != null) {
-                val t = ((now - stepStart).toDouble() / STEP_MS).coerceIn(0.0, 1.0)
+                val t = ((now - stepStart).toDouble() / stepMs).coerceIn(0.0, 1.0)
                 x += (n.x - at.x) * t
                 y += (n.y - at.y) * t
                 z += (n.z - at.z) * t
                 if (t > 0.5) grass = n.tallGrass
-                // the step frame for the first half of the step, one foot then the other
-                if (t < 0.5) frame = if (steps % 2 == 0) 1 else 3
+                // people: the step frame for the first half of the step, one foot then the other; Pokémon: their two steps
+                frame = if (fourWay) { if (t < 0.5) (if (steps % 2 == 0) 1 else 3) else 0 } else ((now / 140) % 2).toInt()
+            } else if (!fourWay) {
+                frame = ((now / 480) % 2).toInt()
             }
-            return MapWanderer.Pose(x, y, z, facing, frame, 0.0, n != null, grass && !person.swimming)
+            var hop = 0.0
+            var alpha = 1f
+            if (bornAt != Long.MIN_VALUE) {
+                val u = (now - bornAt).toDouble() / APPEAR_MS
+                if (u in 0.0..1.0) { hop = sin(PI * u) * 8.0; alpha = minOf(1f, (u * 2.5).toFloat()) }
+            }
+            if (leaving) {
+                val u = ((now - leavingAt).toDouble() / LEAVE_MS).coerceIn(0.0, 1.0)
+                hop = sin(PI * u) * 6.0
+                alpha = (1 - u).toFloat()
+            }
+            if (faint) alpha *= (0.38f + 0.22f * sin(now / 260.0).toFloat())
+            return MapWanderer.Pose(x, y, z, facing, frame, hop, n != null, grass && !person.swimming,
+                inWater = person.swimming && person.wild, alpha = alpha)
         }
 
         internal fun goHome() {
@@ -270,8 +344,24 @@ class MapCrowd(val scene: FieldMap.Scene, people: List<FieldPeople.Person>, priv
         }
     }
 
-    val walkers: List<Walker> = people.map { Walker(it) }
+    val walkers: MutableList<Walker> = people.map { Walker(it) }.toMutableList()
     private var lastNow = Long.MIN_VALUE
+
+    /** The wild Pokémon that turn up now and then (none: nobody comes). */
+    var wildKinds: List<WildKind> = emptyList()
+    /** No wild Pokémon turn up on their own (a game is on). */
+    var wildPaused = false
+    /** How many wild Pokémon may be out at once on their own. */
+    var maxWild = 2
+    /** Tiles a wild Pokémon may come out on (say, not behind the cards on the screen). */
+    var spawnOk: ((FieldMap.Tile) -> Boolean)? = null
+    private var nextWildAt = Long.MIN_VALUE
+    /** Where wild Pokémon popped out (true) or went back in (false) since last asked: for rustling the grass. */
+    val popped = ArrayList<Pair<FieldMap.Tile, Boolean>>()
+
+    private var pokemon: FieldMap.Tile? = null
+    private var pokemonNext: FieldMap.Tile? = null
+    private var others: Collection<FieldMap.Tile> = emptyList()
 
     /** Whether someone stands on, or is stepping onto, tile ([gx], [gy]). */
     fun occupied(gx: Int, gy: Int): Boolean = walkers.any { w ->
@@ -283,29 +373,93 @@ class MapCrowd(val scene: FieldMap.Scene, people: List<FieldPeople.Person>, priv
         (w.at.gx == gx && w.at.gy == gy) || w.next?.let { it.gx == gx && it.gy == gy } == true
     }
 
+    /** The wild Pokémon out now (not going back in). */
+    fun wildOut(): List<Walker> = walkers.filter { it.wild && !it.leaving }
+
+    /**
+     * Brings out a wild Pokémon of [kind] for [life] ms: on a tile near [near] if given, else
+     * anywhere it could be; null when there's nowhere for it.
+     */
+    fun spawnWild(kind: WildKind, now: Long, life: Long, near: FieldMap.Tile? = null, onGrassOnly: Boolean = true): Walker? {
+        val land = scene.tiles.values
+        val pool: Collection<FieldMap.Tile> = when {
+            kind.swims -> scene.water.values
+            !onGrassOnly -> land
+            land.any { it.tallGrass } -> land.filter { it.tallGrass }
+            !scene.outdoor -> land
+            else -> emptyList()
+        }
+        val pk = pokemon
+        val options = pool.filter { t ->
+            !occupied(t.gx, t.gy) && others.none { it.gx == t.gx && it.gy == t.gy } &&
+                (pk == null || abs(pk.gx - t.gx) + abs(pk.gy - t.gy) >= 2) &&
+                (pokemonNext == null || pokemonNext!!.gx != t.gx || pokemonNext!!.gy != t.gy) &&
+                spawnOk?.invoke(t) != false
+        }
+        if (options.isEmpty()) return null
+        val tile = if (near != null) {
+            val close = options.filter { abs(it.gx - near.gx) + abs(it.gy - near.gy) <= 6 }
+            close.randomOrNull(random) ?: options.minByOrNull { abs(it.gx - near.gx) + abs(it.gy - near.gy) }!!
+        } else options[random.nextInt(options.size)]
+        val w = Walker(FieldPeople.Person(kind.model, tile, 3, random.nextInt(4), 3, 3, false, kind.swims, wild = true, species = kind.species))
+        w.bornAt = now
+        w.leaveAt = now + life
+        w.waitUntil = now + APPEAR_MS + 300 + random.nextInt(900)
+        walkers.add(w)
+        popped.add(tile to true)
+        return w
+    }
+
+    /** Sends a wild Pokémon back in (after the step it's on). */
+    fun leave(w: Walker, now: Long) {
+        if (!w.wild || w.leaving) return
+        w.leaveAt = minOf(w.leaveAt, now)
+    }
+
     /**
      * Moves everyone along to [now]. [pokemon] is where the walking Pokémon stands (and [pokemonNext]
-     * where it's stepping to), [pokemonFacing] which way it looks, and whether it's standing still.
+     * where it's stepping to), [pokemonFacing] which way it looks, and whether it's standing still;
+     * [others] are more tiles nobody may step onto (a following Pokémon, a berry plant).
      */
-    fun update(now: Long, pokemon: FieldMap.Tile?, pokemonNext: FieldMap.Tile?, pokemonFacing: Int, pokemonStill: Boolean) {
+    fun update(now: Long, pokemon: FieldMap.Tile?, pokemonNext: FieldMap.Tile?, pokemonFacing: Int, pokemonStill: Boolean,
+               others: Collection<FieldMap.Tile> = emptyList()) {
         val restart = lastNow == Long.MIN_VALUE || now < lastNow || now - lastNow > 5_000
         lastNow = now
+        this.pokemon = pokemon
+        this.pokemonNext = pokemonNext
+        this.others = others
+
+        // wild Pokémon coming and going
+        if (restart) nextWildAt = now + 2_500 + random.nextInt(3_500)
+        if (!wildPaused && wildKinds.isNotEmpty() && now >= nextWildAt) {
+            if (wildOut().size < maxWild) spawnWild(wildKinds[random.nextInt(wildKinds.size)], now, 12_000L + random.nextInt(18_000))
+            nextWildAt = now + 7_000 + random.nextInt(9_000)
+        }
+        walkers.removeAll { it.leaving && now - it.leavingAt > LEAVE_MS }
+
         for (w in walkers) {
             if (restart) {
                 w.next?.let { w.at = it }
                 w.next = null
-                w.waitUntil = now + 300 + random.nextInt(1500)
+                if (!w.wild) w.waitUntil = now + 300 + random.nextInt(1500)
             }
             val n = w.next
             if (n != null) {
-                if (now - w.stepStart < STEP_MS) continue
+                if (now - w.stepStart < w.stepMs) continue
                 w.at = n
                 w.next = null
                 w.steps++
-                w.waitUntil = now + pause(w)
+                w.waitUntil = now + if (w.flee) 120L + random.nextInt(200) else pause(w)
             }
+            if (w.leaving) continue
+            if (w.wild && now >= w.leaveAt) {
+                w.leavingAt = now
+                popped.add(w.at to false)
+                continue
+            }
+            if (w.wild && now - w.bornAt < APPEAR_MS) continue
             // the Pokémon right next to them, looking at them: they turn to it
-            val talkedTo = pokemon != null && pokemonStill && !w.person.swimming &&
+            val talkedTo = pokemon != null && pokemonStill && !w.person.swimming && !w.flee &&
                 abs(pokemon.gx - w.at.gx) + abs(pokemon.gy - w.at.gy) == 1 &&
                 pokemon.gx + DX[pokemonFacing.coerceIn(0, 3)] == w.at.gx && pokemon.gy + DY[pokemonFacing.coerceIn(0, 3)] == w.at.gy
             if (talkedTo) {
@@ -319,6 +473,8 @@ class MapCrowd(val scene: FieldMap.Scene, people: List<FieldPeople.Person>, priv
                 w.goHome()
             }
             if (now < w.waitUntil) continue
+            if (w.flee) { flee(w, now, pokemon, pokemonNext); continue }
+            if (w.still) { w.waitUntil = now + 2_000; continue }
             when (w.kind) {
                 Kind.STILL -> w.waitUntil = now + 2_000
                 Kind.LOOK -> {
@@ -331,11 +487,12 @@ class MapCrowd(val scene: FieldMap.Scene, people: List<FieldPeople.Person>, priv
                         w.waitUntil = now + pause(w)
                     } else {
                         val dir = w.directions[random.nextInt(w.directions.size)]
-                        val t = stepFor(w, dir, pokemon, pokemonNext)
+                        val t = stepFor(w, dir, pokemon, pokemonNext, ranged = true)
                         w.facing = dir
                         if (t != null) {
                             w.next = t
                             w.stepStart = now
+                            w.stepMs = STEP_MS
                         } else {
                             w.waitUntil = now + pause(w)
                         }
@@ -345,7 +502,28 @@ class MapCrowd(val scene: FieldMap.Scene, people: List<FieldPeople.Person>, priv
         }
     }
 
-    private fun pause(w: Walker) = 900L + random.nextInt(2_300)
+    /** A step away from the walking Pokémon, as far as it can get. */
+    private fun flee(w: Walker, now: Long, pokemon: FieldMap.Tile?, pokemonNext: FieldMap.Tile?) {
+        val chaser = pokemonNext ?: pokemon
+        if (chaser == null) { w.waitUntil = now + 300; return }
+        fun far(t: FieldMap.Tile) = abs(t.gx - chaser.gx) + abs(t.gy - chaser.gy)
+        val here = far(w.at)
+        val options = (0 until 4).mapNotNull { d -> stepFor(w, d, pokemon, pokemonNext, ranged = false)?.let { d to it } }
+            .filter { far(it.second) >= here }
+        if (options.isEmpty()) {
+            w.facing = toward(w.at, chaser.gx, chaser.gy)
+            w.waitUntil = now + 250
+            return
+        }
+        val best = options.maxOf { far(it.second) }
+        val (dir, t) = options.filter { far(it.second) == best }.random(random)
+        w.facing = dir
+        w.next = t
+        w.stepStart = now
+        w.stepMs = FLEE_STEP_MS
+    }
+
+    private fun pause(w: Walker) = if (w.wild) 600L + random.nextInt(1_600) else 900L + random.nextInt(2_300)
 
     private fun otherDirection(w: Walker): Int {
         val dirs = w.directions
@@ -356,16 +534,19 @@ class MapCrowd(val scene: FieldMap.Scene, people: List<FieldPeople.Person>, priv
     }
 
     /** The tile a step [dir] takes [w] to, if they may go there. */
-    private fun stepFor(w: Walker, dir: Int, pokemon: FieldMap.Tile?, pokemonNext: FieldMap.Tile?): FieldMap.Tile? {
+    private fun stepFor(w: Walker, dir: Int, pokemon: FieldMap.Tile?, pokemonNext: FieldMap.Tile?, ranged: Boolean): FieldMap.Tile? {
         val gx = w.at.gx + DX[dir]
         val gy = w.at.gy + DY[dir]
         val home = w.person.home
-        if (abs(gx - home.gx) > w.rangeX || abs(gy - home.gy) > w.rangeY) return null
+        if (ranged && (abs(gx - home.gx) > w.rangeX || abs(gy - home.gy) > w.rangeY)) return null
         val key = FieldMap.Scene.key(gx, gy)
         val t = (if (w.person.swimming) scene.water[key] else scene.tiles[key]) ?: return null
         if (!FieldMap.stepOk(w.at, t)) return null
+        // wild ones keep to the grass they came out of (or the cave floor)
+        if (w.wild && !w.flee && !w.person.swimming && w.at.tallGrass && !t.tallGrass) return null
         if (pokemon != null && pokemon.gx == gx && pokemon.gy == gy) return null
         if (pokemonNext != null && pokemonNext.gx == gx && pokemonNext.gy == gy) return null
+        if (others.any { it.gx == gx && it.gy == gy }) return null
         if (occupied(gx, gy)) return null
         return t
     }

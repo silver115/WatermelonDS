@@ -681,6 +681,45 @@
     <string name="pokewalker_explore_hint">Tap somewhere and %1$s walks over. Tap %1$s to say hi.</string>
     <string name="pokewalker_explore_hint_people">Tap somewhere and %1$s walks over, or tap someone to go and meet them. Tap %1$s to say hi.</string>
     <string name="pokewalker_explore_hint_no_sprite">%1$s is out exploring.</string>
+    <string name="pokewalker_games">Games</string>
+    <string name="pokewalker_game_fishing">Fishing</string>
+    <string name="pokewalker_game_tag">Tag</string>
+    <string name="pokewalker_game_contest">Bug-Catching Contest</string>
+    <string name="pokewalker_game_unown">Unown hunt</string>
+    <string name="pokewalker_game_berry">Berry patch</string>
+    <string name="pokewalker_game_stop">Stop the game</string>
+    <string name="pokewalker_fish_walk">%1$s is off to the water to fish…</string>
+    <string name="pokewalker_fish_wait">Waiting for a bite… Tap to reel in.</string>
+    <string name="pokewalker_fish_bite">Something\'s biting! Tap now!</string>
+    <string name="pokewalker_fish_caught">Fished up a %1$s! It was %2$d cm long.</string>
+    <string name="pokewalker_fish_away">It got away…</string>
+    <string name="pokewalker_fish_nowhere">There\'s no water to fish from here.</string>
+    <string name="pokewalker_tag_chase">Tag! Catch the %1$s: %2$d s left.</string>
+    <string name="pokewalker_tag_caught">Tagged the %1$s in %2$d s!</string>
+    <string name="pokewalker_tag_away">The %1$s got away.</string>
+    <string name="pokewalker_tag_nobody">Nobody to play tag with yet. Try again when a wild Pokémon comes out.</string>
+    <string name="pokewalker_contest_on">Bug-Catching Contest: tap the bugs! %1$d s left · %2$d caught</string>
+    <string name="pokewalker_contest_caught">Caught a %1$s! %2$d points.</string>
+    <string name="pokewalker_contest_end">Time\'s up! Your best was a %1$s with %2$d points: %3$s place!</string>
+    <string name="pokewalker_contest_none">Time\'s up! No bugs caught this time.</string>
+    <string name="pokewalker_unown_on">Unown hunt: tap the faint Unown when you spot one. %1$s</string>
+    <string name="pokewalker_unown_found">Found one! %1$s</string>
+    <string name="pokewalker_unown_done">The Unown spelled %1$s!</string>
+    <string name="pokewalker_berry_planted">Planted a %1$s Berry. It grows as you walk.</string>
+    <string name="pokewalker_berry_growing">The %1$s Berry is growing: %2$d more steps to go.</string>
+    <string name="pokewalker_berry_picked">Picked %2$d %1$s Berries!</string>
+    <string name="pokewalker_berry_nowhere">%1$s can\'t get to the berry patch from here.</string>
+    <string-array name="pokewalker_berries">
+        <item>Oran</item>
+        <item>Pecha</item>
+        <item>Cheri</item>
+        <item>Sitrus</item>
+    </string-array>
+    <string-array name="pokewalker_contest_places">
+        <item>1st</item>
+        <item>2nd</item>
+        <item>3rd</item>
+    </string-array>
     <string name="pokewalker_modern_today">Today</string>
     <string name="pokewalker_modern_of_goal">of %1$s</string>
     <string name="pokewalker_modern_watts">Watts</string>

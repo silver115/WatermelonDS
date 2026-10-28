@@ -19,6 +19,7 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
+import android.widget.PopupMenu
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
@@ -76,10 +77,12 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
     private var running = false
     private var pendingApp = -1
     private var statusJob: Job? = null
-    private var walkingPokemon: WalkingPokemon? = null
+    private var walkParty = WalkParty(null)
     private var exploring = false
     private var exploreButton: ImageButton? = null
     private var exploreCaption: TextView? = null
+    private var gamesButton: ImageButton? = null
+    private var captionAt = 0L
     private val leaveExplore = object : OnBackPressedCallback(false) {
         override fun handleOnBackPressed() = setExploring(false)
     }
@@ -208,6 +211,21 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
         stage.addView(caption, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
             Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { setMargins(dp(16), 0, dp(16), dp(16)) })
         exploreCaption = caption
+        // the games to play on the map, in the top corner while exploring
+        val games = ImageButton(this).apply {
+            setImageResource(R.drawable.ic_pw_games)
+            imageTintList = ColorStateList.valueOf(WalkerTheme.TEXT)
+            contentDescription = getString(R.string.pokewalker_games)
+            TooltipCompat.setTooltipText(this, contentDescription)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor((WalkerTheme.CARD and 0x00FFFFFF) or 0xD9000000.toInt())
+            }
+            visibility = View.GONE
+            setOnClickListener { showGames(it) }
+        }
+        stage.addView(games, FrameLayout.LayoutParams(dp(48), dp(48), Gravity.TOP or Gravity.END).apply { setMargins(0, dp(12), dp(12), 0) })
+        gamesButton = games
         stage.setOnTouchListener { v, e -> exploreTouch(v, e) }
         column.addView(stage, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         root.addView(
@@ -414,6 +432,14 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
             sceneDrawnAt = now
             scene.invalidateSelf()
         }
+        scene.map?.let { map ->
+            // what's caught cries out; what a game has to say goes in the caption
+            for (species in map.takeCries()) PokemonCries.play(this, species, lastVolume) {}
+            if (exploring && now - captionAt >= 250) {
+                captionAt = now
+                updateCaption()
+            }
+        }
         val flags = PokewalkerNative.deviceFrame(frame)
         val shade = (flags shr 12) and 0xF
         val current = skin ?: return
@@ -486,16 +512,18 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
     private suspend fun updateScene(status: WalkerStatus?) {
         val walking = status != null && status.registered && status.hasPokemon
         if (walking) scene.scene.setRoute(status!!.routeImage, status.route) else scene.scene.setRoute(0, "")
-        val key = if (walking) "${status!!.species}:${status.strollStartUnix}:${status.route}" else ""
+        val key = if (walking) "${status!!.species}:${status.strollStartUnix}:${status.route}:${status.caught}" else ""
         if (key != walkerKey) {
             walkerKey = key
             val image = if (!walking) null else withContext(Dispatchers.Default) { PokewalkerNative.exportImage() }
             scene.walker = image?.let { RouteSceneDrawable.walkerSprite(it, LcdPalette.MODERN) }
-            walkingPokemon = WalkingPokemon.fromImage(image)
+            walkParty = WalkParty.fromImage(image)
         }
         val b = scene.bounds
-        scene.map = if (!walking) null else RouteMaps.get(this, status!!.route, status.routeImage, walkingPokemon, b.width(), b.height())
+        scene.map = if (!walking) null else RouteMaps.get(this, status!!.route, status.routeImage, walkParty, b.width(), b.height())
+        scene.map?.steps = status?.totalSteps ?: 0
         exploreButton?.visibility = if (scene.map != null) View.VISIBLE else View.GONE
+        updateGamesButton()
         if (exploring && scene.map == null) setExploring(false)
         if (exploring) updateCaption()
     }
@@ -512,8 +540,10 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
             exploreCaption?.visibility = View.GONE
             scene.explore = false
             scene.map?.release()
+            scene.map?.stopGame(SystemClock.uptimeMillis())
             updateBanner(lastStatus)
         }
+        updateGamesButton()
         leaveExplore.isEnabled = on
         updateExploreButton()
         updateCovered()
@@ -540,13 +570,75 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
         val map = scene.map ?: return
         val status = lastStatus ?: return
         val name = status.pokemonName.ifBlank { status.speciesName }
+        val line = map.gameLine(SystemClock.uptimeMillis())?.let { gameText(it, name) }
         val text = getString(R.string.pokewalker_explore_caption, map.scene.course.name, map.scene.course.place, map.game) + "\n" +
-            getString(when {
+            (line ?: getString(when {
                 !map.hasPokemon -> R.string.pokewalker_explore_hint_no_sprite
                 map.hasPeople -> R.string.pokewalker_explore_hint_people
                 else -> R.string.pokewalker_explore_hint
-            }, name)
+            }, name))
         if (exploreCaption?.text?.toString() != text) exploreCaption?.text = text
+    }
+
+    private fun updateGamesButton() {
+        val b = gamesButton ?: return
+        val map = scene.map
+        b.visibility = if (exploring && map != null && map.availableGames().isNotEmpty()) View.VISIBLE else View.GONE
+    }
+
+    /** The games menu: the ones there are here, and a way to stop the one that's on. */
+    private fun showGames(anchor: View) {
+        val map = scene.map ?: return
+        val menu = PopupMenu(this, anchor)
+        val games = map.availableGames()
+        for ((i, g) in games.withIndex()) menu.menu.add(0, i, i, getString(gameName(g)))
+        if (map.gameOn != null) menu.menu.add(0, 100, 100, getString(R.string.pokewalker_game_stop))
+        menu.setOnMenuItemClickListener { item ->
+            val now = SystemClock.uptimeMillis()
+            if (item.itemId == 100) map.stopGame(now) else games.getOrNull(item.itemId)?.let { map.startGame(it, now) }
+            updateCaption()
+            true
+        }
+        menu.show()
+    }
+
+    private fun gameName(g: MapGames.Game): Int = when (g) {
+        MapGames.Game.FISHING -> R.string.pokewalker_game_fishing
+        MapGames.Game.TAG -> R.string.pokewalker_game_tag
+        MapGames.Game.CONTEST -> R.string.pokewalker_game_contest
+        MapGames.Game.UNOWN -> R.string.pokewalker_game_unown
+        MapGames.Game.BERRY -> R.string.pokewalker_game_berry
+    }
+
+    /** What a game has to say, in words. */
+    private fun gameText(l: MapGames.Line, name: String): String {
+        val species = if (l.species > 0) PokewalkerNative.speciesName(l.species).ifBlank { "#${l.species}" } else ""
+        val berries = resources.getStringArray(R.array.pokewalker_berries)
+        val berry = berries.getOrElse(l.n) { berries[0] }
+        return when (l.what) {
+            MapGames.What.FISH_WALK -> getString(R.string.pokewalker_fish_walk, name)
+            MapGames.What.FISH_WAIT -> getString(R.string.pokewalker_fish_wait)
+            MapGames.What.FISH_BITE -> getString(R.string.pokewalker_fish_bite)
+            MapGames.What.FISH_CAUGHT -> getString(R.string.pokewalker_fish_caught, species, l.n)
+            MapGames.What.FISH_AWAY -> getString(R.string.pokewalker_fish_away)
+            MapGames.What.FISH_NOWHERE -> getString(R.string.pokewalker_fish_nowhere)
+            MapGames.What.TAG_CHASE -> getString(R.string.pokewalker_tag_chase, species, l.n)
+            MapGames.What.TAG_CAUGHT -> getString(R.string.pokewalker_tag_caught, species, l.n)
+            MapGames.What.TAG_AWAY -> getString(R.string.pokewalker_tag_away, species)
+            MapGames.What.TAG_NOBODY -> getString(R.string.pokewalker_tag_nobody)
+            MapGames.What.CONTEST_ON -> getString(R.string.pokewalker_contest_on, l.n, l.m)
+            MapGames.What.CONTEST_CAUGHT -> getString(R.string.pokewalker_contest_caught, species, l.n)
+            MapGames.What.CONTEST_END -> getString(R.string.pokewalker_contest_end, species, l.n,
+                resources.getStringArray(R.array.pokewalker_contest_places).getOrElse(l.m - 1) { "" })
+            MapGames.What.CONTEST_NONE -> getString(R.string.pokewalker_contest_none)
+            MapGames.What.UNOWN_ON -> getString(R.string.pokewalker_unown_on, l.word)
+            MapGames.What.UNOWN_FOUND -> getString(R.string.pokewalker_unown_found, l.word)
+            MapGames.What.UNOWN_DONE -> getString(R.string.pokewalker_unown_done, l.word)
+            MapGames.What.BERRY_PLANTED -> getString(R.string.pokewalker_berry_planted, berry)
+            MapGames.What.BERRY_GROWING -> getString(R.string.pokewalker_berry_growing, berry, l.m)
+            MapGames.What.BERRY_PICKED -> getString(R.string.pokewalker_berry_picked, berry, l.m)
+            MapGames.What.BERRY_NOWHERE -> getString(R.string.pokewalker_berry_nowhere, name)
+        }
     }
 
     /** Taps while exploring: on the Pokémon it hops and cries, elsewhere it walks over. */
@@ -561,6 +653,7 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
             root.getLocationInWindow(rootAt)
             if (map.tap(e.x + at[0] - rootAt[0], e.y + at[1] - rootAt[1], SystemClock.uptimeMillis())) cry(map)
             scene.invalidateSelf()
+            updateCaption()
         }
         return true
     }
@@ -606,8 +699,7 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
         return when (keyCode) {
             KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_SPACE -> {
                 if (down && event.repeatCount == 0) {
-                    map.hop(now)
-                    cry(map)
+                    if (map.action(now)) cry(map)
                 }
                 true
             }

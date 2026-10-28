@@ -9,15 +9,32 @@ import kotlin.random.Random
  * Little things moving over the route map, in the picture's own pixels: sunlight glinting on
  * water, cloud shadows and birds passing over, leaves, petals or snow drifting by, fireflies at
  * night, dust and drips in caves, embers by the volcano, and grass shaken up where the Pokémon
- * walks. All our own; picked by the course's kind and the time of day. Pure Kotlin.
+ * walks. All our own; picked by the course's kind and the time of day. And the [weather]: rain
+ * (always at the Lake of Rage, as in the game, and passing showers elsewhere), snow on Mt. Silver,
+ * morning mist, blowing sand on the beach, and the dark of Dark Cave. Pure Kotlin.
  */
 class MapAmbience(private val scene: FieldMap.Scene, private val random: Random = Random.Default) {
 
-    /** A square of [size] pixels of [color] (ARGB) at picture position ([x], [y]). */
-    class Dot(val x: Float, val y: Float, val size: Int, val color: Int)
+    /** A [size] x [tall] block of pixels of [color] (ARGB) at picture position ([x], [y]). */
+    class Dot(val x: Float, val y: Float, val size: Int, val color: Int, val tall: Int = size)
 
-    /** A soft shadow ([rx] x [ry] picture pixels) of a cloud passing over. */
-    class Cloud(val x: Float, val y: Float, val rx: Float, val ry: Float, val alpha: Float)
+    /** A soft shadow ([rx] x [ry] picture pixels) of a cloud passing over; [mist] a soft white bank of fog instead. */
+    class Cloud(val x: Float, val y: Float, val rx: Float, val ry: Float, val alpha: Float, val mist: Boolean = false)
+
+    enum class Weather { CLEAR, RAIN, SNOW, MIST, SAND, DARK }
+
+    /** The weather now (see [weatherFor]). */
+    var weather = Weather.CLEAR
+
+    /** A colour laid over the whole picture for the weather (ARGB, 0: none). */
+    var tint = 0
+        private set
+
+    /** How dark it is around the Pokémon's light (0: not dark). */
+    var darkness = 0f
+        private set
+
+    private val mist = ArrayList<FloatArray>() // x, y, rx, ry, speed
 
     private class Mote(
         var x: Float, var y: Float, var vx: Float, var vy: Float,
@@ -49,7 +66,17 @@ class MapAmbience(private val scene: FieldMap.Scene, private val random: Random 
         val dt = if (lastNow == Long.MIN_VALUE) 0f else ((now - lastNow).coerceIn(0, 200)) / 1000f
         lastNow = now
         val night = minute < 5 * 60 || minute >= 19 * 60
-        val day = scene.outdoor && !night && minute in 6 * 60 until 18 * 60 + 30
+        val wet = weather == Weather.RAIN || weather == Weather.MIST || weather == Weather.SNOW || weather == Weather.SAND
+        val day = scene.outdoor && !night && minute in 6 * 60 until 18 * 60 + 30 && !wet
+        tint = when (weather) {
+            Weather.RAIN -> 0x2C1A2840
+            Weather.SNOW -> 0x14E8F0FF
+            Weather.MIST -> 0x18F0F4F8
+            Weather.SAND -> 0x22D8B070
+            else -> 0
+        }
+        darkness = if (weather == Weather.DARK) 0.72f else 0f
+        weatherMotes(now, dt)
 
         spawn(now, night, day)
         val it = motes.iterator()
@@ -109,9 +136,28 @@ class MapAmbience(private val scene: FieldMap.Scene, private val random: Random 
                     m.vy += 60f * dt // falls back down
                     dots.add(Dot(m.x, m.y, 1, fade(m.color, 1 - u)))
                 }
+                DROP -> dots.add(Dot(m.x, m.y, 1, m.color, 4))
+                SPLASH -> {
+                    val c = fade(m.color, 1 - u)
+                    val r = 1f + u * 2.5f
+                    dots.add(Dot(m.x - r, m.y - u * 2f, 1, c)); dots.add(Dot(m.x + r, m.y - u * 2f, 1, c))
+                }
+                SPARK -> {
+                    m.vy += 20f * dt
+                    dots.add(Dot(m.x, m.y, 1, fade(m.color, 1 - u)))
+                }
             }
         }
 
+        if (weather == Weather.MIST) {
+            // banks of mist drifting across
+            if (mist.isEmpty()) repeat(5) { mist.add(newMist(random.nextFloat() * (w + 240) - 120)) }
+            for (c in mist) {
+                c[0] += c[4] * dt
+                if (c[0] - c[2] > w + 20) { val n = newMist(-c[2] - 20 - random.nextFloat() * 80); System.arraycopy(n, 0, c, 0, 5) }
+                cloudsOut.add(Cloud(c[0], c[1], c[2], c[3], 0.34f, mist = true))
+            }
+        }
         if (day) {
             // cloud shadows drifting slowly over
             if (clouds.isEmpty()) repeat(3) { clouds.add(newCloud(random.nextFloat() * (w + 200) - 100)) }
@@ -121,6 +167,68 @@ class MapAmbience(private val scene: FieldMap.Scene, private val random: Random 
                 cloudsOut.add(Cloud(c[0], c[1], c[2], c[3], 0.17f))
             }
             birds(now, dots)
+        }
+    }
+
+    /** A Fire type's sparks where it walks, at picture position ([x], [y]). */
+    fun sparks(x: Float, y: Float, now: Long) {
+        if (motes.size > 140) return
+        val colors = intArrayOf(0xFFFFD040.toInt(), 0xFFFF8030.toInt(), 0xFFFFF0A0.toInt())
+        repeat(2) {
+            motes.add(Mote(x + random.nextFloat() * 8 - 4, y - random.nextFloat() * 4, (random.nextFloat() - 0.5f) * 14f,
+                -14f - random.nextFloat() * 14f, now, 380L + random.nextInt(260), colors[random.nextInt(colors.size)], 1, SPARK, 0f))
+        }
+    }
+
+    /** Puffs of dust where someone came out of the cave floor (or went back), at ([x], [y]). */
+    fun puff(x: Float, y: Float, now: Long) {
+        repeat(6) {
+            motes.add(Mote(x + random.nextFloat() * 10 - 5, y - random.nextFloat() * 3, (random.nextFloat() - 0.5f) * 24f,
+                -6f - random.nextFloat() * 8f, now, 500L + random.nextInt(250), 0xFFD8D0C0.toInt(), 1, DUST, 0f))
+        }
+    }
+
+    /** Splashes on the water at ([x], [y]) (something jumped in or out). */
+    fun splash(x: Float, y: Float, now: Long) {
+        repeat(3) { k ->
+            motes.add(Mote(x + (k - 1) * 3f, y + k, 0f, 0f, now, 600L + k * 120L, 0xFFE8F6FF.toInt(), 1, RIPPLE, 0f))
+        }
+        repeat(6) {
+            motes.add(Mote(x + random.nextFloat() * 6 - 3, y - 2, (random.nextFloat() - 0.5f) * 30f, -30f - random.nextFloat() * 20f,
+                now, 450L, 0xFFE8F6FF.toInt(), 1, GRASS, 0f))
+        }
+    }
+
+    private fun newMist(x: Float): FloatArray {
+        val rx = 110f + random.nextFloat() * 110f
+        return floatArrayOf(x, random.nextFloat() * h, rx, rx * (0.28f + random.nextFloat() * 0.15f), 3f + random.nextFloat() * 4f)
+    }
+
+    /** Rain falling and splashing, snow, blowing sand. */
+    private fun weatherMotes(now: Long, dt: Float) {
+        fun chance(perSecond: Float) = random.nextFloat() < perSecond / 30f
+        when (weather) {
+            Weather.RAIN -> {
+                // falling streaks, a little slanted, and splashes where they land
+                repeat(4) {
+                    if (chance(30f) && motes.size < 260) motes.add(Mote(random.nextFloat() * (w + 60) - 30, -6f, -40f, 300f + random.nextFloat() * 60f,
+                        now, 900L, 0x88D8E4F4.toInt(), 1, DROP, 0f))
+                }
+                if (chance(26f)) {
+                    val water = scene.waterSpots
+                    if (water.isNotEmpty() && random.nextInt(3) == 0) {
+                        val i = random.nextInt(water.size / 2)
+                        motes.add(Mote(water[i * 2], water[i * 2 + 1], 0f, 0f, now, 600L, 0xFFD8ECFF.toInt(), 1, RIPPLE, 0f))
+                    } else {
+                        motes.add(Mote(random.nextFloat() * w, random.nextFloat() * h, 0f, 0f, now, 260L, 0xFFE0ECF8.toInt(), 1, SPLASH, 0f))
+                    }
+                }
+            }
+            Weather.SNOW -> if (kind != FieldMap.Kind.ICE && chance(10f) && motes.size < 200) motes.add(Mote(random.nextFloat() * (w + 40) - 20, -4f,
+                random.nextFloat() * 8 - 4, 12f + random.nextFloat() * 10, now, 30_000L, 0xFFFFFFFF.toInt(), if (random.nextInt(4) == 0) 2 else 1, SNOW, random.nextFloat() * 6f))
+            Weather.SAND -> if (chance(24f) && motes.size < 220) motes.add(Mote(-4f, random.nextFloat() * h, 90f + random.nextFloat() * 60f,
+                random.nextFloat() * 10 - 5, now, 6_000L, if (random.nextBoolean()) 0xC0E8D0A0.toInt() else 0xA0D0B080.toInt(), 1, DUST, 0f))
+            else -> {}
         }
     }
 
@@ -213,15 +321,42 @@ class MapAmbience(private val scene: FieldMap.Scene, private val random: Random 
         return (a shl 24) or (color and 0xFFFFFF)
     }
 
-    private companion object {
-        const val SPARKLE = 0
-        const val FIREFLY = 1
-        const val LEAF = 2
-        const val PETAL = 3
-        const val SNOW = 4
-        const val DUST = 5
-        const val EMBER = 6
-        const val RIPPLE = 7
-        const val GRASS = 8
+    companion object {
+        /**
+         * The weather on [course] at [epochMillis] (local time [minute] of the day): the game's
+         * own where the map has some (the Lake of Rage's rain, Dark Cave's darkness), snow on
+         * Mt. Silver, else now and then a shower, morning mist or (by the sea) blowing sand,
+         * picked by the hour so it lasts a while and comes back the same.
+         */
+        fun weatherFor(course: FieldMap.Course, day: Int, minute: Int): Weather {
+            when (course.map) {
+                88 -> return Weather.RAIN      // the Lake of Rage: WEATHER_RAIN in its map header
+                176 -> return Weather.DARK     // Dark Cave: WEATHER_FLASH, too dark to see without Flash
+                90 -> return Weather.SNOW      // Mt. Silver
+            }
+            if (course.kind == FieldMap.Kind.CAVE || course.kind == FieldMap.Kind.ICE || course.kind == FieldMap.Kind.VOLCANO) return Weather.CLEAR
+            if (course.place.contains("Forest") && course.kind == FieldMap.Kind.FOREST && course.matrix != 0) return Weather.CLEAR
+            val hour = minute / 60
+            val roll = Math.floorMod((course.name.hashCode() * 31 + day) * 131 + hour * 7919, 100)
+            return when {
+                roll < 9 -> Weather.RAIN
+                hour in 5..8 && roll < 30 && (course.kind == FieldMap.Kind.LAKE || course.kind == FieldMap.Kind.FIELD || course.kind == FieldMap.Kind.FOREST) -> Weather.MIST
+                course.kind == FieldMap.Kind.BEACH && roll in 90..96 -> Weather.SAND
+                else -> Weather.CLEAR
+            }
+        }
+
+        private const val SPARKLE = 0
+        private const val FIREFLY = 1
+        private const val LEAF = 2
+        private const val PETAL = 3
+        private const val SNOW = 4
+        private const val DUST = 5
+        private const val EMBER = 6
+        private const val RIPPLE = 7
+        private const val GRASS = 8
+        private const val DROP = 9
+        private const val SPLASH = 10
+        private const val SPARK = 11
     }
 }

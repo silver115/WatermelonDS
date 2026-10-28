@@ -9,15 +9,29 @@ import kotlin.random.Random
 /**
  * The walking Pokémon exploring a [FieldMap.Scene] the way the game's wandering people do: a
  * step or a few one way, a look around, now and then a walk over to somewhere else in sight,
- * and a little hop when it's happy. It can also be sent somewhere ([goTo]) or walked about
- * ([walk]). Times are milliseconds on any steady clock. Pure Kotlin, so it can be tested on its own.
+ * and a little hop when it's happy. It hops down ledges, goes and reads signs, sniffs at tall
+ * grass and looks out over water. Its type shows: a Water type [swims], a Flying type [flies]
+ * over to somewhere else, a Ghost type [fades] out and back in a few tiles away. It can also be
+ * sent somewhere ([goTo]) or walked about ([walk]). Times are milliseconds on any steady clock.
+ * Pure Kotlin, so it can be tested on its own.
  */
 class MapWanderer(val scene: FieldMap.Scene, private val random: Random = Random.Default) {
 
     /** Where to draw it: a world position on the ground, which way it faces, its frame and how high it hops. */
-    class Pose(val x: Double, val y: Double, val z: Double, val facing: Int, val frame: Int, val hop: Double, val moving: Boolean,
-               /** Standing in tall grass (its feet are hidden in it). */
-               val grass: Boolean = false)
+    class Pose(
+        val x: Double, val y: Double, val z: Double, val facing: Int, val frame: Int, val hop: Double, val moving: Boolean,
+        /** Standing in tall grass (its feet are hidden in it). */
+        val grass: Boolean = false,
+        /** Swimming: only its top half shows above the water. */
+        val inWater: Boolean = false,
+        /** Up in the air: drawn over everything, its shadow on the ground below. */
+        val aloft: Boolean = false,
+        /** How solid it's drawn (1: fully). */
+        val alpha: Float = 1f,
+    )
+
+    /** How it gets to the tile it's heading for. */
+    enum class Move { WALK, JUMP, FLY, FADE }
 
     companion object {
         /** One tile's walk (the game's is 16 frames, about 270 ms; a stroll is a little slower). */
@@ -27,9 +41,27 @@ class MapWanderer(val scene: FieldMap.Scene, private val random: Random = Random
         const val HOP_HEIGHT = 9.0
         /** After being walked about by hand, how long before it goes off on its own again. */
         const val MANUAL_MS = 6_000L
+        /** Hopping down a ledge: two tiles, a little arc. */
+        const val JUMP_MS = 520L
+        const val JUMP_HEIGHT = 12.0
+        /** Flying over to somewhere: how high it goes. */
+        const val FLY_HEIGHT = 44.0
+        /** Fading out and back in somewhere else. */
+        const val FADE_MS = 1_400L
+        /** How long it stands reading a sign. */
+        const val READ_MS = 2_600L
+        /** The highest anything goes above its spot (for the painter's buffer). */
+        const val MAX_LIFT = 48
 
         private val DX = intArrayOf(0, 0, -1, 1) // UP, DOWN, LEFT, RIGHT (FollowerSprites order)
         private val DY = intArrayOf(-1, 1, 0, 0)
+
+        fun towards(from: FieldMap.Tile, t: FieldMap.Tile) = when {
+            abs(t.gx - from.gx) >= abs(t.gy - from.gy) && t.gx > from.gx -> FollowerSprites.RIGHT
+            abs(t.gx - from.gx) >= abs(t.gy - from.gy) && t.gx < from.gx -> FollowerSprites.LEFT
+            t.gy > from.gy -> FollowerSprites.DOWN
+            else -> FollowerSprites.UP
+        }
     }
 
     var at: FieldMap.Tile = scene.start ?: scene.tiles.values.firstOrNull() ?: throw IllegalArgumentException("nowhere to walk")
@@ -37,17 +69,25 @@ class MapWanderer(val scene: FieldMap.Scene, private val random: Random = Random
     /** The tile it's stepping onto, if it's walking. */
     var next: FieldMap.Tile? = null
         private set
+    /** The tile it last left (where whoever follows it steps to). */
+    var previous: FieldMap.Tile? = null
+        private set
     private var stepStart = 0L
+    private var stepMs = STEP_MS
+    var move = Move.WALK
+        private set
     var facing = FollowerSprites.DOWN
         private set
     private var waitUntil = Long.MIN_VALUE
     private val path = ArrayDeque<FieldMap.Tile>()
     private var onTrip = false
     private var hopStart = Long.MIN_VALUE
+    private var hopHeight = HOP_HEIGHT
     private var lastNow = Long.MIN_VALUE
     private var manualUntil = Long.MIN_VALUE
     private var heldDirection = -1
     private var queuedDirection = -1
+    private var reading = false
 
     /** Tiles it would rather not head for (say, the ones behind the cards on the screen). */
     var avoid: ((FieldMap.Tile) -> Boolean)? = null
@@ -55,8 +95,21 @@ class MapWanderer(val scene: FieldMap.Scene, private val random: Random = Random
     /** Tiles it can't step onto right now (someone's standing there). */
     var blocked: ((Int, Int) -> Boolean)? = null
 
+    /** A Water type: it may go into the water and swim. */
+    var swims = false
+    /** A Flying type: now and then it flies over to somewhere else in sight. */
+    var flies = false
+    /** A Ghost type: now and then it fades out and back in a few tiles away. */
+    var fades = false
+
+    /** Kept where it is (a game has it fishing, say): it doesn't wander off on its own. */
+    var held = false
+
     /** Where to look once the walk it was sent on ([goTo]) is over. */
     private var lookAt: FieldMap.Tile? = null
+
+    /** Whether it's standing still, not walking, flying or fading. */
+    val idle get() = next == null
 
     /** Moves things along to [now]. */
     fun update(now: Long) {
@@ -64,6 +117,7 @@ class MapWanderer(val scene: FieldMap.Scene, private val random: Random = Random
             // first time, or back after a while: stand where it got to and think again
             next?.let { at = it }
             next = null
+            move = Move.WALK
             path.clear()
             onTrip = false
             waitUntil = now + 300
@@ -72,10 +126,11 @@ class MapWanderer(val scene: FieldMap.Scene, private val random: Random = Random
         repeat(4) {
             val n = next
             if (n != null) {
-                if (now - stepStart < STEP_MS) return
+                if (now - stepStart < stepMs) return
                 at = n
                 next = null
-                val arrivedAt = stepStart + STEP_MS
+                move = Move.WALK
+                val arrivedAt = stepStart + stepMs
                 val wanted = if (queuedDirection >= 0) queuedDirection else heldDirection
                 queuedDirection = -1
                 if (wanted >= 0) {
@@ -90,14 +145,16 @@ class MapWanderer(val scene: FieldMap.Scene, private val random: Random = Random
                     if (neighbours(at, t)) { startStep(t, arrivedAt); return@repeat }
                     path.clear()
                     lookAt = null
+                    reading = false
                 }
                 lookAt?.let { facing = towards(at, it); lookAt = null }
-                if (onTrip && random.nextInt(4) == 0) hop(now)
+                if (onTrip && !reading && random.nextInt(4) == 0) hop(now)
                 onTrip = false
-                waitUntil = now + pause()
+                waitUntil = now + if (reading) READ_MS else pause()
+                reading = false
                 return
             }
-            if (now < waitUntil || now < manualUntil) return
+            if (held || now < waitUntil || now < manualUntil) return
             decide(now)
             if (next == null) return
         }
@@ -109,33 +166,72 @@ class MapWanderer(val scene: FieldMap.Scene, private val random: Random = Random
         var y = at.y
         var z = at.z
         val n = next
-        var grass = at.tallGrass
+        var on = at
+        var arc = 0.0
+        var alpha = 1f
+        var aloft = false
         if (n != null) {
-            val t = ((now - stepStart).toDouble() / STEP_MS).coerceIn(0.0, 1.0)
-            x += (n.x - at.x) * t
-            y += (n.y - at.y) * t
-            z += (n.z - at.z) * t
-            if (t > 0.5) grass = n.tallGrass
+            val t = ((now - stepStart).toDouble() / stepMs).coerceIn(0.0, 1.0)
+            if (move == Move.FADE) {
+                // out where it was, back in where it's going
+                if (t >= 0.5) { x = n.x; y = n.y; z = n.z; on = n }
+                alpha = abs(1 - 2 * t).toFloat().coerceAtLeast(0.04f)
+            } else {
+                x += (n.x - at.x) * t
+                y += (n.y - at.y) * t
+                z += (n.z - at.z) * t
+                if (t > 0.5) on = n
+                when (move) {
+                    Move.JUMP -> arc = sin(PI * t) * JUMP_HEIGHT
+                    Move.FLY -> { arc = sin(PI * t) * FLY_HEIGHT; aloft = arc > 10 }
+                    else -> {}
+                }
+            }
         }
-        // walking: a step every 160 ms; standing: the slow step in place the game's followers do
-        val frame = if (n != null) ((now / 160) % 2).toInt() else ((now / 480) % 2).toInt()
+        val water = isWater(on)
+        // walking: a step every 160 ms (flapping faster); standing: the slow step in place the game's followers do
+        val frame = when {
+            n != null && move == Move.FLY -> ((now / 90) % 2).toInt()
+            n != null && move != Move.FADE -> ((now / 160) % 2).toInt()
+            else -> ((now / 480) % 2).toInt()
+        }
         val u = (now - hopStart).toDouble() / HOP_MS
-        val hop = if (hopStart != Long.MIN_VALUE && u >= 0.0 && u <= 1.0) sin(PI * u) * HOP_HEIGHT else 0.0
-        return Pose(x, y, z, facing, frame, hop, n != null, grass)
+        val hop = if (hopStart != Long.MIN_VALUE && u >= 0.0 && u <= 1.0) sin(PI * u) * hopHeight else 0.0
+        return Pose(x, y, z, facing, frame, maxOf(hop, arc), n != null && move != Move.FADE,
+            grass = on.tallGrass && !water, inWater = water && arc < 4, aloft = aloft, alpha = alpha)
     }
+
+    private fun isWater(t: FieldMap.Tile) = scene.tile(t.gx, t.gy) == null && scene.water.containsKey(FieldMap.Scene.key(t.gx, t.gy))
 
     /** Puts it standing on [tile]. */
     fun placeAt(tile: FieldMap.Tile) {
         at = tile
         next = null
+        move = Move.WALK
         path.clear()
         onTrip = false
         lookAt = null
+        reading = false
     }
 
     /** A happy little hop. */
     fun hop(now: Long) {
-        if (hopStart == Long.MIN_VALUE || now - hopStart > HOP_MS) hopStart = now
+        if (hopStart == Long.MIN_VALUE || now - hopStart > HOP_MS) { hopStart = now; hopHeight = HOP_HEIGHT }
+    }
+
+    /** A small bob, as when sniffing at something. */
+    private fun nod(now: Long) {
+        if (hopStart == Long.MIN_VALUE || now - hopStart > HOP_MS) { hopStart = now; hopHeight = 3.0 }
+    }
+
+    /** Turns to look [direction]. */
+    fun face(direction: Int) {
+        if (next == null) facing = direction.coerceIn(0, 3)
+    }
+
+    /** Waits where it is until [until] before doing anything on its own. */
+    fun pauseUntil(until: Long) {
+        waitUntil = maxOf(waitUntil, until)
     }
 
     /**
@@ -149,6 +245,7 @@ class MapWanderer(val scene: FieldMap.Scene, private val random: Random = Random
         heldDirection = -1
         queuedDirection = -1
         path.clear()
+        reading = false
         lookAt = look
         if (route.isEmpty()) {
             if (look != null && next == null) { facing = towards(at, look); lookAt = null } else if (look == null) hop(now)
@@ -169,6 +266,7 @@ class MapWanderer(val scene: FieldMap.Scene, private val random: Random = Random
         path.clear()
         onTrip = false
         lookAt = null
+        reading = false
         heldDirection = if (held) direction else -1
         if (next != null) {
             // one more step that way once this one's done
@@ -186,11 +284,15 @@ class MapWanderer(val scene: FieldMap.Scene, private val random: Random = Random
     // ---- making up its mind -------------------------------------------------------------------
 
     private fun decide(now: Long) {
+        if (flies && random.nextInt(100) < 14 && fly(now)) return
+        if (fades && random.nextInt(100) < 12 && fade(now)) return
         val roll = random.nextInt(100)
         when {
-            roll < 48 -> wander(now)
-            roll < 70 -> lookAround(now)
-            roll < 94 -> trip(now)
+            roll < 42 -> wander(now)
+            roll < 60 -> lookAround(now)
+            roll < 82 -> trip(now)
+            roll < 88 -> if (!readSign(now)) trip(now)
+            roll < 95 -> sniff(now)
             else -> { hop(now); waitUntil = now + 700 + random.nextInt(600) }
         }
     }
@@ -237,6 +339,78 @@ class MapWanderer(val scene: FieldMap.Scene, private val random: Random = Random
         startStep(path.removeFirst(), now)
     }
 
+    /** Over to a sign it can get to, to stand and read it. */
+    private fun readSign(now: Long): Boolean {
+        if (scene.signs.isEmpty()) return false
+        val seen = reachable(at, 16)
+        var best: Pair<FieldMap.Tile, FieldMap.Tile>? = null
+        var bestD = Int.MAX_VALUE
+        for (s in scene.signs) {
+            // read from the front (south of it) if it can, else from the side
+            for (k in 0 until 4) {
+                val dir = intArrayOf(FollowerSprites.DOWN, FollowerSprites.LEFT, FollowerSprites.RIGHT, FollowerSprites.UP)[k]
+                val t = scene.tile(s.gx + DX[dir], s.gy + DY[dir]) ?: continue
+                val d = seen[t] ?: continue
+                if (avoid?.invoke(t) == true) continue
+                val cost = d + k * 3
+                if (cost < bestD) { bestD = cost; best = t to s }
+                break
+            }
+        }
+        val (spot, sign) = best ?: return false
+        val route = route(at, spot, 30) ?: return false
+        path.clear()
+        lookAt = sign
+        reading = true
+        if (route.isEmpty()) {
+            facing = towards(at, sign)
+            lookAt = null
+            reading = false
+            waitUntil = now + READ_MS
+            return true
+        }
+        path.addAll(route)
+        onTrip = true
+        startStep(path.removeFirst(), now)
+        return true
+    }
+
+    /** Next to tall grass or water: it turns to it and has a sniff. */
+    private fun sniff(now: Long) {
+        val dirs = (0 until 4).filter { d ->
+            val gx = at.gx + DX[d]
+            val gy = at.gy + DY[d]
+            scene.tile(gx, gy)?.tallGrass == true && !at.tallGrass || (scene.tile(gx, gy) == null && scene.water.containsKey(FieldMap.Scene.key(gx, gy)))
+        }
+        if (dirs.isEmpty()) { lookAround(now); return }
+        facing = dirs[random.nextInt(dirs.size)]
+        nod(now)
+        waitUntil = now + 1_200 + random.nextInt(1_200)
+    }
+
+    /** Off into the air and down somewhere else in sight. */
+    private fun fly(now: Long): Boolean {
+        val options = scene.tiles.values.filter { t ->
+            val d = abs(t.gx - at.gx) + abs(t.gy - at.gy)
+            d in 5..14 && blocked?.invoke(t.gx, t.gy) != true && avoid?.invoke(t) != true
+        }
+        val t = options.randomOrNull(random) ?: return false
+        facing = towards(at, t)
+        startMove(t, now, Move.FLY, (450L + (abs(t.gx - at.gx) + abs(t.gy - at.gy)) * 110L).coerceAtMost(2_000L))
+        return true
+    }
+
+    /** Out of sight and back a few tiles away. */
+    private fun fade(now: Long): Boolean {
+        val options = scene.tiles.values.filter { t ->
+            val d = abs(t.gx - at.gx) + abs(t.gy - at.gy)
+            d in 3..8 && blocked?.invoke(t.gx, t.gy) != true && avoid?.invoke(t) != true
+        }
+        val t = options.randomOrNull(random) ?: return false
+        startMove(t, now, Move.FADE, FADE_MS)
+        return true
+    }
+
     // ---- moving ---------------------------------------------------------------------------------
 
     private fun tryStep(direction: Int, now: Long): Boolean {
@@ -247,26 +421,61 @@ class MapWanderer(val scene: FieldMap.Scene, private val random: Random = Random
 
     private fun startStep(t: FieldMap.Tile, now: Long) {
         facing = towards(at, t)
+        val jump = abs(t.gx - at.gx) + abs(t.gy - at.gy) == 2
+        startMove(t, now, if (jump) Move.JUMP else Move.WALK, if (jump) JUMP_MS else STEP_MS)
+    }
+
+    private fun startMove(t: FieldMap.Tile, now: Long, how: Move, ms: Long) {
+        previous = at
         next = t
+        move = how
+        stepMs = ms
         stepStart = now
     }
 
-    private fun towards(from: FieldMap.Tile, t: FieldMap.Tile) = when {
-        t.gx > from.gx -> FollowerSprites.RIGHT
-        t.gx < from.gx -> FollowerSprites.LEFT
-        t.gy > from.gy -> FollowerSprites.DOWN
-        else -> FollowerSprites.UP
+    /** A tile it may stand on: ground, or water when it swims. */
+    private fun tileAt(gx: Int, gy: Int): FieldMap.Tile? {
+        scene.tile(gx, gy)?.let { return it }
+        return if (swims) scene.water[FieldMap.Scene.key(gx, gy)] else null
     }
 
-    /** The tile a step [direction] from [from], if it can go there. */
+    /** Whether it can go from [a] to the neighbouring [b]: a step on land, or in and out of the water. */
+    private fun fits(a: FieldMap.Tile, b: FieldMap.Tile): Boolean =
+        if (isWater(a) || isWater(b)) abs(a.y - b.y) <= 24.0 else FieldMap.stepOk(a, b)
+
+    /** The tile a step [direction] from [from] takes it to, if it can go there (two tiles down a ledge). */
     private fun step(from: FieldMap.Tile, direction: Int): FieldMap.Tile? {
-        val t = scene.tile(from.gx + DX[direction], from.gy + DY[direction]) ?: return null
-        if (blocked?.invoke(t.gx, t.gy) == true) return null
-        return if (FieldMap.stepOk(from, t)) t else null
+        val gx = from.gx + DX[direction]
+        val gy = from.gy + DY[direction]
+        val t = tileAt(gx, gy)
+        if (t != null) {
+            if (blocked?.invoke(t.gx, t.gy) == true) return null
+            return if (fits(from, t)) t else null
+        }
+        // a ledge it can hop down: over it to the ground beyond
+        if (scene.ledges[FieldMap.Scene.key(gx, gy)] == direction && !isWater(from)) {
+            val land = scene.tile(gx + DX[direction], gy + DY[direction]) ?: return null
+            if (blocked?.invoke(land.gx, land.gy) == true) return null
+            if (land.y > from.y + 2.0) return null
+            return land
+        }
+        return null
     }
 
-    private fun neighbours(a: FieldMap.Tile, b: FieldMap.Tile) =
-        abs(a.gx - b.gx) + abs(a.gy - b.gy) == 1 && FieldMap.stepOk(a, b) && blocked?.invoke(b.gx, b.gy) != true
+    private fun neighbours(a: FieldMap.Tile, b: FieldMap.Tile): Boolean {
+        val d = abs(a.gx - b.gx) + abs(a.gy - b.gy)
+        if (d == 1) return fits(a, b) && blocked?.invoke(b.gx, b.gy) != true
+        if (d == 2 && (a.gx == b.gx || a.gy == b.gy)) {
+            val dir = when {
+                b.gx > a.gx -> FollowerSprites.RIGHT
+                b.gx < a.gx -> FollowerSprites.LEFT
+                b.gy > a.gy -> FollowerSprites.DOWN
+                else -> FollowerSprites.UP
+            }
+            return step(a, dir)?.let { it.gx == b.gx && it.gy == b.gy } == true
+        }
+        return false
+    }
 
     /** Tiles it can walk to from [from] within [limit] steps, with how many steps. */
     private fun reachable(from: FieldMap.Tile, limit: Int): Map<FieldMap.Tile, Int> {
@@ -320,6 +529,133 @@ class MapWanderer(val scene: FieldMap.Scene, private val random: Random = Random
 }
 
 /**
+ * A second Pokémon following the walking one around, the way the game's following Pokémon trail
+ * the player: into the tile it just left, catching up by the shortest way when it falls behind
+ * (and, left far behind, fading back in beside it). It keeps to the ground. Pure Kotlin.
+ */
+class MapBuddy(val scene: FieldMap.Scene, start: FieldMap.Tile) {
+    var at: FieldMap.Tile = start
+        private set
+    var next: FieldMap.Tile? = null
+        private set
+    var facing = FollowerSprites.DOWN
+        private set
+    private var stepStart = 0L
+    private var stepMs = MapWanderer.STEP_MS
+    private var fading = false
+    private var lastNow = Long.MIN_VALUE
+
+    private val dx = intArrayOf(0, 0, -1, 1)
+    private val dy = intArrayOf(-1, 1, 0, 0)
+
+    /** Moves it along to [now], after [leader]. [blocked] says where someone else is standing. */
+    fun update(now: Long, leader: MapWanderer, blocked: (Int, Int) -> Boolean = { _, _ -> false }) {
+        if (lastNow == Long.MIN_VALUE || now < lastNow || now - lastNow > 5_000) {
+            next?.let { at = it }
+            next = null
+            fading = false
+        }
+        lastNow = now
+        val n = next
+        if (n != null) {
+            if (now - stepStart < stepMs) return
+            at = n
+            next = null
+            fading = false
+        }
+        val lead = leader.next ?: leader.at
+        val d = dist(at, lead)
+        if (d == 0 && leader.next == null) {
+            // it walked back onto us: step aside
+            val aside = (0 until 4).mapNotNull { scene.tile(at.gx + dx[it], at.gy + dy[it]) }
+                .firstOrNull { FieldMap.stepOk(at, it) && !blocked(it.gx, it.gy) }
+            if (aside != null) start(aside, now, MapWanderer.STEP_MS)
+            return
+        }
+        if (d <= 1) {
+            if (leader.next == null) facing = MapWanderer.towards(at, lead)
+            return
+        }
+        // where the leader just was, if that's next to us; else the way there
+        val trail = leader.at.takeIf { leader.next != null && dist(at, it) == 1 && scene.tile(it.gx, it.gy) != null }
+        val target = trail?.takeIf { FieldMap.stepOk(at, it) && !blocked(it.gx, it.gy) }
+            ?: firstStepTowards(lead, blocked)
+        if (target != null) {
+            start(target, now, if (d > 3) 240L else MapWanderer.STEP_MS)
+        } else if (d > 6 && leader.next == null) {
+            // left far behind (it flew, swam or jumped off): back in beside it
+            val beside = (0 until 4).mapNotNull { scene.tile(lead.gx + dx[it], lead.gy + dy[it]) }
+                .filter { !blocked(it.gx, it.gy) }
+                .minByOrNull { dist(it, at) }
+            if (beside != null) {
+                start(beside, now, MapWanderer.FADE_MS)
+                fading = true
+            }
+        }
+    }
+
+    private fun start(t: FieldMap.Tile, now: Long, ms: Long) {
+        facing = MapWanderer.towards(at, t)
+        next = t
+        stepStart = now
+        stepMs = ms
+    }
+
+    private fun dist(a: FieldMap.Tile, b: FieldMap.Tile) = abs(a.gx - b.gx) + abs(a.gy - b.gy)
+
+    /** The first step on the shortest way on the ground to beside [goal]. */
+    private fun firstStepTowards(goal: FieldMap.Tile, blocked: (Int, Int) -> Boolean): FieldMap.Tile? {
+        val parent = HashMap<FieldMap.Tile, FieldMap.Tile>()
+        val queue = ArrayDeque<FieldMap.Tile>()
+        val seen = HashSet<FieldMap.Tile>()
+        queue.add(at)
+        seen.add(at)
+        var steps = 0
+        while (queue.isNotEmpty() && steps < 2_000) {
+            steps++
+            val a = queue.removeFirst()
+            if (a !== at && dist(a, goal) <= 1) {
+                var c = a
+                while (parent[c] !== at) c = parent.getValue(c)
+                return c
+            }
+            for (k in 0 until 4) {
+                val b = scene.tile(a.gx + dx[k], a.gy + dy[k]) ?: continue
+                if (b in seen || !FieldMap.stepOk(a, b) || blocked(b.gx, b.gy)) continue
+                if (b.gx == goal.gx && b.gy == goal.gy) continue
+                seen.add(b)
+                parent[b] = a
+                queue.add(b)
+            }
+        }
+        return null
+    }
+
+    fun pose(now: Long): MapWanderer.Pose {
+        var x = at.x
+        var y = at.y
+        var z = at.z
+        val n = next
+        var on = at
+        var alpha = 1f
+        if (n != null) {
+            val t = ((now - stepStart).toDouble() / stepMs).coerceIn(0.0, 1.0)
+            if (fading) {
+                if (t >= 0.5) { x = n.x; y = n.y; z = n.z; on = n }
+                alpha = abs(1 - 2 * t).toFloat().coerceAtLeast(0.04f)
+            } else {
+                x += (n.x - at.x) * t
+                y += (n.y - at.y) * t
+                z += (n.z - at.z) * t
+                if (t > 0.5) on = n
+            }
+        }
+        val frame = if (n != null && !fading) ((now / 160) % 2).toInt() else ((now / 480 + 1) % 2).toInt()
+        return MapWanderer.Pose(x, y, z, facing, frame, 0.0, n != null, grass = on.tallGrass, alpha = alpha)
+    }
+}
+
+/**
  * Draws the walking Pokémon in the picture's own pixels: its overworld sprite standing on the
  * ground with a little shadow, hidden wherever the scene has something nearer (a tree in front,
  * a roof). Fills [buffer], which covers [bufferWidth] x [bufferHeight] picture pixels from
@@ -332,7 +668,7 @@ class MapSpritePainter(val scene: FieldMap.Scene, val sprite: FollowerSprites.Sp
     private val ry = (size * 0.09f).coerceAtLeast(2f)
     private val below = ry.toInt() + 2
     val bufferWidth = size + 8
-    val bufferHeight = size + MapWanderer.HOP_HEIGHT.toInt() + below + 2
+    val bufferHeight = size + MapWanderer.MAX_LIFT + below + 2
     val buffer = IntArray(bufferWidth * bufferHeight)
     var left = 0
         private set
@@ -348,9 +684,23 @@ class MapSpritePainter(val scene: FieldMap.Scene, val sprite: FollowerSprites.Sp
         size - 1 - lowest
     }
 
-    // where the sprite was last drawn, for taps
-    private var spriteLeft = 0
-    private var spriteTop = 0
+    /** Rows of empty space over the head. */
+    private val headroom: Int = run {
+        var highest = size
+        for (f in sprite.frames) for (y in 0 until size) {
+            if ((0 until size).any { f[y * size + it] ushr 24 != 0 }) { if (y < highest) highest = y; break }
+        }
+        highest.coerceAtMost(size - 1)
+    }
+
+    /** Where the sprite was last drawn (its top left, in picture pixels), for taps and things drawn over it. */
+    var spriteLeft = 0
+        private set
+    var spriteTop = 0
+        private set
+
+    /** Rows of empty space over the head of the sprite. */
+    val headSpace get() = headroom
 
     /** Whether it casts a shadow (not someone swimming). */
     var shadow = true
@@ -368,18 +718,24 @@ class MapSpritePainter(val scene: FieldMap.Scene, val sprite: FollowerSprites.Sp
         val w = scene.width
         val h = scene.height
         fun visible(px: Int, py: Int) = px in 0 until w && py in 0 until h && scene.depth[py * w + px] <= depth * 1.0008f
+        val alpha = pose.alpha.coerceIn(0f, 1f)
 
-        // in tall grass its feet (and shadow) are hidden, as in the game, unless it hops out
-        val grassLine = if (pose.grass && pose.hop < 3.0) ay - 5 else Int.MAX_VALUE
+        // swimming, only the top shows over the water; in tall grass its feet (and shadow) are hidden, as in the game, unless it hops out
+        val body = size - feet - headroom
+        val cutLine = when {
+            pose.inWater -> ay - (body * 0.45f).roundToInt()
+            pose.grass && pose.hop < 3.0 -> ay - 5
+            else -> Int.MAX_VALUE
+        }
         // the shadow on the ground
-        if (shadow && grassLine == Int.MAX_VALUE) for (dy in -ry.toInt()..ry.toInt()) for (dx in -rx.toInt()..rx.toInt()) {
+        if (shadow && !pose.inWater && cutLine == Int.MAX_VALUE) for (dy in -ry.toInt()..ry.toInt()) for (dx in -rx.toInt()..rx.toInt()) {
             if ((dx / rx) * (dx / rx) + (dy / ry) * (dy / ry) > 1f) continue
             val px = ax + dx
             val py = ay + dy
             if (!visible(px, py)) continue
             val bx = px - left
             val by = py - top
-            if (bx in 0 until bufferWidth && by in 0 until bufferHeight) buffer[by * bufferWidth + bx] = 0x48000000
+            if (bx in 0 until bufferWidth && by in 0 until bufferHeight) buffer[by * bufferWidth + bx] = shade(0x48000000, alpha * if (pose.aloft) 0.6f else 1f)
         }
 
         // the Pokémon, feet on the spot
@@ -392,16 +748,31 @@ class MapSpritePainter(val scene: FieldMap.Scene, val sprite: FollowerSprites.Sp
             if (c ushr 24 == 0) continue
             val px = spriteLeft + x
             val py = spriteTop + y
-            if (py > grassLine || !visible(px, py)) continue
+            if (py > cutLine) continue
+            if (pose.aloft) { if (px !in 0 until w || py !in 0 until h) continue } else if (!visible(px, py)) continue
             val bx = px - left
             val by = py - top
             if (bx in 0 until bufferWidth && by in 0 until bufferHeight) {
-                buffer[by * bufferWidth + bx] = c
+                buffer[by * bufferWidth + bx] = if (alpha >= 1f) c else shade(c, alpha)
                 any = true
+            }
+        }
+        // a ring of water where it swims
+        if (pose.inWater) {
+            val half = (body * 0.38f).roundToInt().coerceAtLeast(4)
+            for (dx in -half..half) {
+                val px = ax + dx
+                val py = cutLine + 1 + if ((dx + (pose.frame * 2)) % 4 == 0) 1 else 0
+                if (!visible(px, py)) continue
+                val bx = px - left
+                val by = py - top
+                if (bx in 0 until bufferWidth && by in 0 until bufferHeight) buffer[by * bufferWidth + bx] = shade(0xC8E8F6FF.toInt(), alpha)
             }
         }
         return any || a[0] in 0f..w.toFloat() && a[1] in 0f..h.toFloat()
     }
+
+    private fun shade(c: Int, k: Float): Int = ((((c ushr 24) * k).toInt().coerceIn(0, 255)) shl 24) or (c and 0xFFFFFF)
 
     /** Whether picture position ([px], [py]) is on the Pokémon as last painted (with some room to spare). */
     fun hit(px: Float, py: Float): Boolean {

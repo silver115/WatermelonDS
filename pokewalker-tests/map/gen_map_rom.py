@@ -20,7 +20,10 @@ The fake world:
     (44, 16), someone hidden by a flag next to her, a man facing down at (40, 20), a swimmer in
     the water at (54, 13), an apricorn tree (a sprite that isn't a person) at (43, 8) and
     someone on a wall at (34, 2); their sprites (mmodel 123, 130 and 138) have sixteen frames
-    each, the tree's (251) seven.
+    each, the tree's (251) seven; a sign on the front of the house (bg event at (47, 21));
+  - a ledge across x 20-25 at row 20 of block 0 (in the tall grass), hopped down southwards;
+  - types (`a/0/0/2`): Pidgey Normal/Flying, Pikachu Electric, Psyduck and Magikarp Water,
+    Gastly Ghost/Poison, Cyndaquil Fire, everyone else Normal.
 """
 import struct, sys
 
@@ -379,6 +382,7 @@ def perms_block0():
         for x in range(14, 18): put(x, y, 0, 0x80)               # the house
     for y in range(12, 14):
         for x in range(9, 11): put(x, y, 0, 0x80)                # the box nobody loads
+    for x in range(20, 26): put(x, 20, 0x3B)                     # a ledge to hop down (south)
     return perms
 
 def perms_cave():
@@ -441,10 +445,10 @@ def static_btx(name, count):
     textures = [('%s.%d' % (name, n + 1), 32, 32, 3, b'\x11' * 512, True) for n in range(count)]
     return nitro_file(b'BTX0', [tex0(textures, [(name, [0, rgb(200, 120, 40)] + [0] * 14)])])
 
-def event_file(objects):
-    """files/fielddata/eventdata/zone_event.json.txt: one bg event, then the objects (sprite,
-    movement, type, flag, facing, x range, y range, x, z), no warps or coordinate triggers."""
-    out = u32(1) + b'\0' * 20 + u32(len(objects))
+def event_file(objects, bgs=()):
+    """files/fielddata/eventdata/zone_event.json.txt: bg events (type, x, z), then the objects
+    (sprite, movement, type, flag, facing, x range, y range, x, z), no warps or coordinate triggers."""
+    out = u32(len(bgs)) + b''.join(u16(0) + u16(kind) + s32(x) + s32(z) + s32(0) + s32(0) for kind, x, z in bgs) + u32(len(objects))
     for i, (sprite, movement, kind, flag, facing, xr, yr, x, z) in enumerate(objects):
         out += b''.join(u16(v) for v in (i, sprite, movement, kind, flag, 0, facing, 0, 0, 0, xr, yr, x, z)) + u32(0)
     return out + u32(0) + u32(0)
@@ -502,9 +506,12 @@ def build():
         (SPRITE_SWIMMER, 0, 1, 0, 2, 0, 0, 32 + 22, 13),      # in the water, facing left
         (SPRITE_TREE, 0, 0, 0, 1, 0, 0, 32 + 11, 8),          # an apricorn tree: not a person
         (SPRITE_MAN, 0, 0, 0, 1, 0, 0, 32 + 2, 2),            # up on the rocks: nowhere to stand
-    ])
+    ], bgs=[(1, 32 + 15, 21), (2, 32 + 7, 10)])               # a sign on the front of the house; a hidden item
     empty_events = event_file([])
     files['a/0/3/2'] = narc([empty_events] * ROUTE29_EVENTS + [route29] + [empty_events] * 4)
+    # types (poketool/personal): Normal for everyone but a few
+    types = {16: (0, 2), 25: (13, 13), 54: (11, 11), 92: (7, 3), 155: (10, 10), 129: (11, 11)}
+    files['a/0/0/2'] = narc([bytes([50] * 6 + list(types.get(i, (0, 0)))) + b'\0' * 36 for i in range(494)])
     return files
 
 if __name__ == '__main__':

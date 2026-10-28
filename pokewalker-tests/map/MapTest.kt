@@ -3,6 +3,10 @@ import me.magnum.melonds.pokewalker.FieldAnimations
 import me.magnum.melonds.pokewalker.FieldMap
 import me.magnum.melonds.pokewalker.FieldPeople
 import me.magnum.melonds.pokewalker.MapCrowd
+import me.magnum.melonds.pokewalker.MapBuddy
+import me.magnum.melonds.pokewalker.MapGames
+import me.magnum.melonds.pokewalker.BerryArt
+import me.magnum.melonds.pokewalker.PokemonTypes
 import me.magnum.melonds.pokewalker.MapAmbience
 import me.magnum.melonds.pokewalker.FollowerSprites
 import me.magnum.melonds.pokewalker.MapSpritePainter
@@ -16,7 +20,8 @@ import kotlin.system.exitProcess
 /**
  * The route map on the fake ROM from gen_map_rom.py: which spot is picked, what is drawn, which
  * tiles the Pokémon may walk on and how high, the follower sprite, the wandering and the drawing
- * of the sprite behind things, and the people of the place. Usage: MapTest <fake.nds> <fake_without_maps.nds>
+ * of the sprite behind things, the people of the place, the wild Pokémon, the one following,
+ * the moves by type, ledges and signs, the weather and the games. Usage: MapTest <fake.nds> <fake_without_maps.nds>
  */
 private var checks = 0
 private var failures = 0
@@ -244,15 +249,18 @@ fun main(args: Array<String>) {
         val at = wanderer.at
         if (scene.tile(at.gx, at.gy) == null) outside++
         if (at !== prev) {
-            if (abs(at.gx - prev.gx) + abs(at.gy - prev.gy) != 1 || !FieldMap.stepOk(prev, at)) jumps++
+            val d = abs(at.gx - prev.gx) + abs(at.gy - prev.gy)
+            // a step, or a hop down the ledge (row 20, x 52-57) from just above it to just below
+            val ledge = d == 2 && at.gx == prev.gx && prev.gy == 19 && at.gy == 21 && at.gx - 32 in 20..25
+            if ((d != 1 || !FieldMap.stepOk(prev, at)) && !ledge) jumps++
             prev = at
         }
         seen.add(FieldMap.Scene.key(at.gx, at.gy))
-        check(pose.hop in 0.0..MapWanderer.HOP_HEIGHT, "hop height")
+        check(pose.hop in 0.0..MapWanderer.JUMP_HEIGHT, "hop height")
         t += 50
     }
     check(outside == 0, "it never stands off the walkable tiles")
-    check(jumps == 0, "it only ever steps to a neighbouring tile ($jumps jumps)")
+    check(jumps == 0, "it only ever steps to a neighbouring tile or hops down the ledge ($jumps jumps)")
     check(seen.size > 15, "it gets around (${seen.size} tiles in 3 minutes)")
 
     // sent somewhere: it gets there by walking
@@ -426,6 +434,339 @@ fun main(args: Array<String>) {
         check(false, "a cut-short event file: an error")
     } catch (e: Exception) {
         check(e.message?.contains("9 objects") == true, "a cut-short event file: an error (${e.message})")
+    }
+
+    // ---- types, the course's Pokémon and the ones caught, from the walker's memory ----
+    check(PokemonTypes.of(src, 25) == setOf(13) && PokemonTypes.of(src, 16) == setOf(0, 2) && PokemonTypes.of(src, 92) == setOf(7, 3),
+        "types from the personal data: Pikachu Electric, Pidgey Normal/Flying, Gastly Ghost/Poison")
+    check(PokemonTypes.of(source(args[1]), 25).isEmpty(), "no personal data, no types")
+    val walkerImage = ByteArray(0x10000)
+    fun summary(o: Int, species: Int, form: Int = 0, female: Boolean = false, shiny: Boolean = false) {
+        walkerImage[o] = (species and 0xFF).toByte(); walkerImage[o + 1] = (species shr 8).toByte()
+        walkerImage[o + 0x0D] = (form or (if (female) 1 shl 5 else 2 shl 5)).toByte()
+        walkerImage[o + 0x0E] = (if (shiny) 2 else 0).toByte()
+    }
+    summary(0x8F52, 161); summary(0x8F62, 16, shiny = true); summary(0x8F72, 19, female = true)
+    summary(0xCE8C, 19); summary(0xCE9C + 0x10, 152)
+    check(WalkingPokemon.routePokemon(walkerImage) == listOf(WalkingPokemon(161, 0, false, false), WalkingPokemon(16, 0, false, true), WalkingPokemon(19, 0, true, false)),
+        "the course's three Pokémon (route info +0x52)")
+    check(WalkingPokemon.caught(walkerImage) == listOf(WalkingPokemon(19, 0, false, false), WalkingPokemon(152, 0, false, false)), "the ones caught, skipping an empty slot")
+
+    // ---- ledges and signs ----
+    check(scene.ledges[FieldMap.Scene.key(32 + 21, 20)] == FollowerSprites.DOWN, "a ledge, jumped down southwards")
+    check(scene.signs.size == 1 && scene.signs[0].gx == 47 && scene.signs[0].gy == 21, "the sign on the house (not the hidden item)")
+    val above = scene.tile(32 + 21, 19)
+    val below = scene.tile(32 + 21, 21)
+    check(above != null && below != null && scene.tile(32 + 21, 20) == null, "ground above and below the ledge, the ledge itself not")
+    if (above != null && below != null) {
+        val jumper = MapWanderer(scene, Random(4))
+        var tj = 500_000L
+        jumper.placeAt(above); jumper.update(tj)
+        jumper.walk(FollowerSprites.DOWN, false, tj)
+        check(jumper.next?.gy == 21 && jumper.move == MapWanderer.Move.JUMP, "walked down at the ledge, it hops over it")
+        val mid = jumper.pose(tj + MapWanderer.JUMP_MS / 2)
+        check(mid.hop > 8.0, "high in the middle of the hop (${mid.hop})")
+        repeat(20) { tj += 50; jumper.update(tj) }
+        check(jumper.at === below, "and lands two tiles down")
+        jumper.walk(FollowerSprites.UP, false, tj)
+        repeat(10) { tj += 50; jumper.update(tj) }
+        check(jumper.at === below && jumper.facing == FollowerSprites.UP, "it can't climb back up the ledge")
+        check(jumper.goTo(above, tj), "but it can walk round to the top")
+    }
+    // reading the sign: it walks up to it and stands looking at it
+    run {
+        val reader = MapWanderer(scene, Random(21))
+        var tr = 0L
+        var reading = 0L
+        while (tr < 600_000) {
+            reader.update(tr)
+            if (reader.idle && reader.at.gx == 47 && reader.at.gy == 22 && reader.facing == FollowerSprites.UP) reading += 100
+            tr += 100
+        }
+        check(reading >= MapWanderer.READ_MS, "now and then it goes and reads the sign ($reading ms in 10 minutes)")
+    }
+
+    // ---- moves by type ----
+    run {
+        // a Water type swims
+        val swimmer = MapWanderer(scene, Random(8)).apply { swims = true }
+        var tw = 0L
+        var inWater = 0
+        var nowhere = 0
+        while (tw < 300_000) {
+            swimmer.update(tw)
+            val p = swimmer.pose(tw)
+            if (p.inWater) inWater++
+            if (scene.tile(swimmer.at.gx, swimmer.at.gy) == null && !scene.water.containsKey(FieldMap.Scene.key(swimmer.at.gx, swimmer.at.gy))) nowhere++
+            tw += 100
+        }
+        check(inWater > 50, "a Water type goes for a swim ($inWater tenths of a second in 5 minutes)")
+        check(nowhere == 0, "only ever on the ground or in the water")
+        val stays = MapWanderer(scene, Random(8))
+        var ts = 0L
+        var wet = 0
+        while (ts < 120_000) { stays.update(ts); if (stays.pose(ts).inWater) wet++; ts += 100 }
+        check(wet == 0, "others stay out of the water")
+
+        // a Flying type flies over to places
+        val flier = MapWanderer(scene, Random(9)).apply { flies = true }
+        var tf = 0L
+        var flights = 0
+        var aloft = 0
+        var offGround = 0
+        while (tf < 300_000) {
+            flier.update(tf)
+            val p = flier.pose(tf)
+            if (p.aloft) aloft++
+            if (flier.move == MapWanderer.Move.FLY && flier.next != null && p.hop > 40.0) flights++
+            if (scene.tile(flier.at.gx, flier.at.gy) == null) offGround++
+            tf += 50
+        }
+        check(aloft > 10 && flights > 0, "a Flying type flies over to somewhere else ($aloft frames up)")
+        check(offGround == 0, "and lands on the ground")
+
+        // a Ghost type fades out and back in
+        val ghost = MapWanderer(scene, Random(10)).apply { fades = true }
+        var tg = 0L
+        var faded = 0
+        while (tg < 300_000) {
+            ghost.update(tg)
+            if (ghost.pose(tg).alpha < 0.5f) faded++
+            tg += 50
+        }
+        check(faded > 5, "a Ghost type fades out and back in ($faded faded frames)")
+
+        // drawn: swimming only its top shows, flying it shows over the house, fading it's see-through
+        val pp = MapSpritePainter(scene, sprite)
+        val wet0 = scene.water.values.first()
+        pp.paint(MapWanderer.Pose(wet0.x, wet0.y, wet0.z, FollowerSprites.DOWN, 0, 0.0, false, inWater = true))
+        val swimShown = pp.buffer.count { it ushr 24 == 0xFF && (it and 0xFFFFFF) != 0xE8F6FF }
+        check(swimShown in 1 until opaque, "swimming, only its top half shows ($swimShown of $opaque)")
+        check(pp.buffer.none { it == 0x48000000 }, "and no shadow on the water")
+        pp.paint(MapWanderer.Pose(bx, 16.0, 256.0 + 16 * 1 + 8, FollowerSprites.DOWN, 0, 40.0, false, aloft = true))
+        check(pp.buffer.count { it ushr 24 == 0xFF } == opaque, "up in the air it shows over the house")
+        pp.paint(MapWanderer.Pose(front.x, front.y, front.z, FollowerSprites.DOWN, 0, 0.0, false, alpha = 0.5f))
+        check(pp.buffer.count { it ushr 24 in 100..160 } == opaque, "half faded, it's half see-through")
+    }
+
+    // ---- a Pokémon caught on the walk follows along ----
+    run {
+        val leader = MapWanderer(scene, Random(12))
+        val startBeside = listOf(0 to 1, 1 to 0, -1 to 0, 0 to -1).mapNotNull { (dx, dy) -> scene.tile(leader.at.gx + dx, leader.at.gy + dy) }.first()
+        val buddy = MapBuddy(scene, startBeside)
+        var tb = 0L
+        var close = 0
+        var total = 0
+        var bad = 0
+        var lastAt = buddy.at
+        var leaps = 0
+        while (tb < 300_000) {
+            leader.update(tb)
+            buddy.update(tb, leader)
+            if (scene.tile(buddy.at.gx, buddy.at.gy) == null) bad++
+            if (buddy.at !== lastAt) {
+                if (abs(buddy.at.gx - lastAt.gx) + abs(buddy.at.gy - lastAt.gy) != 1) leaps++
+                lastAt = buddy.at
+            }
+            if (leader.idle && buddy.next == null) {
+                total++
+                if (abs(buddy.at.gx - leader.at.gx) + abs(buddy.at.gy - leader.at.gy) <= 1) close++
+            }
+            tb += 50
+        }
+        check(bad == 0, "the one following stays on the ground")
+        check(total > 0 && close * 10 >= total * 9, "and is right behind it when it stops ($close of $total)")
+        check(leaps <= 3, "walking after it, not jumping about ($leaps)")
+    }
+
+    // ---- wild Pokémon come out of the tall grass ----
+    run {
+        val crowd = MapCrowd(scene, emptyList(), Random(13))
+        crowd.wildKinds = listOf(MapCrowd.WildKind(FollowerSprites.spriteFor(161, 0, false), 161, false))
+        val pk = MapWanderer(scene, Random(14))
+        pk.blocked = { gx, gy -> crowd.occupied(gx, gy) }
+        var tw = 0L
+        var out = 0
+        var offGrass = 0
+        var clash = 0
+        var seenMax = 0
+        var firstAt = -1L
+        var appeared = 0
+        var wentBack = 0
+        while (tw < 240_000) {
+            pk.update(tw)
+            crowd.update(tw, pk.at, pk.next, pk.facing, pk.idle)
+            for ((tile, appear) in crowd.popped) { if (appear) appeared++ else wentBack++; if (!tile.tallGrass) offGrass++ }
+            crowd.popped.clear()
+            val wild = crowd.wildOut()
+            if (wild.isNotEmpty() && firstAt < 0) firstAt = tw
+            seenMax = maxOf(seenMax, wild.size)
+            for (w in crowd.walkers) {
+                if (!w.at.tallGrass) offGrass++
+                if ((w.at.gx == pk.at.gx && w.at.gy == pk.at.gy) || (pk.next?.let { it.gx == w.at.gx && it.gy == w.at.gy } == true)) clash++
+            }
+            out += wild.size
+            tw += 50
+        }
+        check(firstAt in 0..10_000, "a wild Pokémon comes out within ten seconds ($firstAt ms)")
+        check(appeared >= 6 && wentBack >= 4, "they come and go ($appeared out, $wentBack back in)")
+        check(seenMax <= 2, "no more than two at once ($seenMax)")
+        check(offGrass == 0, "always in the tall grass ($offGrass)")
+        check(clash == 0, "never on the walking Pokémon's tile")
+        val grassless = scene.tiles.values.count { !it.tallGrass }
+        check(grassless >= 20, "ground without tall grass in sight too ($grassless tiles)")
+        var spawnedOff = 0
+        repeat(80) {
+            val one = crowd.spawnWild(crowd.wildKinds[0], tw, 5_000)
+            if (one != null && !one.at.tallGrass) spawnedOff++
+            if (one != null) crowd.walkers.remove(one)
+        }
+        check(spawnedOff == 0, "they only ever come out of the tall grass ($spawnedOff of 80 elsewhere)")
+        val w = crowd.spawnWild(crowd.wildKinds[0], tw, 5_000)
+        check(w != null && w.pose(tw).hop == 0.0 && w.pose(tw + MapCrowd.APPEAR_MS / 2).hop > 4.0, "popping out, it hops up out of the grass")
+    }
+
+    // ---- the weather ----
+    run {
+        check(MapAmbience.weatherFor(FieldMap.COURSES[6], 100, 600) == MapAmbience.Weather.RAIN, "it always rains at the Lake of Rage, as in the game")
+        check(MapAmbience.weatherFor(FieldMap.COURSES[12], 100, 600) == MapAmbience.Weather.DARK, "Dark Cave is dark")
+        check(MapAmbience.weatherFor(FieldMap.COURSES[21], 100, 600) == MapAmbience.Weather.SNOW, "it snows on Mt. Silver")
+        check(MapAmbience.weatherFor(FieldMap.COURSES[5], 100, 600) == MapAmbience.Weather.CLEAR, "no weather in Union Cave")
+        val showers = (0 until 365).sumOf { d -> (0 until 24).count { h -> MapAmbience.weatherFor(FieldMap.COURSES[0], d, h * 60) == MapAmbience.Weather.RAIN } }
+        check(showers in 365 * 24 / 25..365 * 24 / 6, "now and then a shower on Route 29 ($showers hours a year)")
+        check(MapAmbience.weatherFor(FieldMap.COURSES[0], 7, 13 * 60 + 5) == MapAmbience.weatherFor(FieldMap.COURSES[0], 7, 13 * 60 + 50), "the weather lasts the hour")
+        val rain = MapAmbience(scene, Random(3)).apply { weather = MapAmbience.Weather.RAIN }
+        val dd = ArrayList<MapAmbience.Dot>()
+        val cc = ArrayList<MapAmbience.Cloud>()
+        var drops = 0
+        for (k in 0 until 300) { rain.frame(k * 33L, 12 * 60, dd, cc); drops += dd.count { it.tall == 4 } }
+        check(drops > 1_000 && rain.tint != 0 && cc.isEmpty(), "rain falls in streaks, darker, no cloud shadows ($drops)")
+        val mist = MapAmbience(scene, Random(3)).apply { weather = MapAmbience.Weather.MIST }
+        mist.frame(0, 7 * 60, dd, cc)
+        check(cc.isNotEmpty() && cc.all { it.mist }, "mist drifts across in banks")
+        val dark = MapAmbience(scene, Random(3)).apply { weather = MapAmbience.Weather.DARK }
+        dark.frame(0, 12 * 60, dd, cc)
+        check(dark.darkness > 0.5f, "dark")
+        val fire = MapAmbience(scene, Random(3))
+        fire.frame(49_967, 12 * 60, dd, cc)
+        fire.sparks(100f, 100f, 50_000)
+        fire.frame(50_033, 12 * 60, dd, cc)
+        check(dd.count { it.x in 90f..110f && it.y in 85f..105f } >= 2, "a Fire type leaves sparks")
+    }
+
+    // ---- the games ----
+    run {
+        val crowd = MapCrowd(scene, emptyList(), Random(15))
+        crowd.wildKinds = listOf(MapCrowd.WildKind(FollowerSprites.spriteFor(161, 0, false), 161, false))
+        val pk = MapWanderer(scene, Random(16))
+        pk.blocked = { gx, gy -> crowd.occupied(gx, gy) }
+        val games = MapGames(scene, pk, crowd, Random(17))
+        val fishModel = FollowerSprites.spriteFor(129, 0, false)
+        games.fishKinds = listOf(MapCrowd.WildKind(fishModel, 129, true))
+        games.bugKinds = listOf(MapCrowd.WildKind(FollowerSprites.spriteFor(123, 0, false), 123, false))
+        games.unownModels = IntArray(26) { FollowerSprites.spriteFor(201, it, false) }
+        val store = object : MapGames.BerryStore { override var planted = -1L; override var kind = 0; override var picked = 0 }
+        val patch = scene.tiles.values.firstOrNull { t -> !t.tallGrass && listOf(0 to 1, 0 to -1, 1 to 0, -1 to 0).all { (dx, dy) -> scene.tile(t.gx + dx, t.gy + dy) != null } }
+        check(patch != null, "a spot for the berry patch")
+        games.berryTile = patch
+        games.berryStore = store
+        check(games.available() == MapGames.Game.values().toList(), "all five games here (${games.available()})")
+        var tg = 1_000_000L
+        fun run(ms: Long, each: () -> Unit = {}) {
+            val until = tg + ms
+            while (tg < until) {
+                pk.update(tg)
+                crowd.update(tg, pk.at, pk.next, pk.facing, pk.idle)
+                games.update(tg)
+                each()
+                tg += 40
+            }
+        }
+        // fishing: to the water, cast, a bite, reel it in
+        check(games.start(MapGames.Game.FISHING, tg), "fishing starts")
+        var bit = false
+        var fishedFrom: FieldMap.Tile? = null
+        run(25_000) { if (games.biting && !bit) { bit = true; fishedFrom = pk.at; games.tap(null, null, false, tg) } }
+        check(bit, "something bites")
+        check(games.leap != null || games.lineAt(tg)?.what == MapGames.What.FISH_CAUGHT || games.cries.contains(129), "and it's reeled in: a Magikarp")
+        check(games.fishCaught == 1 && games.cries.contains(129), "one fish caught, and it cries")
+        check(fishedFrom?.let { a -> listOf(0 to 1, 0 to -1, 1 to 0, -1 to 0).any { (dx, dy) -> scene.water.containsKey(FieldMap.Scene.key(a.gx + dx, a.gy + dy)) && scene.tile(a.gx + dx, a.gy + dy) == null } } == true,
+            "it fished from the water's edge")
+        games.cries.clear()
+        run(3_000)
+        check(games.game == null, "and that's the end of it")
+        // a bite missed
+        games.start(MapGames.Game.FISHING, tg)
+        var missed = false
+        run(25_000) { if (games.lineAt(tg)?.what == MapGames.What.FISH_AWAY) missed = true }
+        check(missed && games.fishCaught == 1, "a bite not reeled in gets away")
+
+        // tag: a wild one runs off, the Pokémon chases it
+        check(games.start(MapGames.Game.TAG, tg), "tag starts")
+        val target = crowd.wildOut().firstOrNull()
+        check(target != null && target.flee, "with a wild Pokémon running away")
+        var ended: MapGames.What? = null
+        run(30_000) { val w = games.lineAt(tg)?.what; if (games.game == null && ended == null) ended = w }
+        check(ended == MapGames.What.TAG_CAUGHT || ended == MapGames.What.TAG_AWAY, "tag ends tagged or got away ($ended)")
+        run(2_000)
+
+        // the Bug-Catching Contest
+        check(games.start(MapGames.Game.CONTEST, tg), "the contest starts")
+        check(games.game == MapGames.Game.CONTEST, "the contest is on")
+        var caughtBugs = 0
+        run(61_000) {
+            if (games.game == MapGames.Game.CONTEST) crowd.walkers.firstOrNull { it.wild && !it.leaving && tg - it.bornAt > 600 }?.let { if (games.tap(it, null, false, tg)) caughtBugs++ }
+        }
+        check(caughtBugs >= 5, "bugs come out to be caught ($caughtBugs)")
+        val end = games.lineAt(tg)
+        check(games.game == null && end?.what == MapGames.What.CONTEST_END && end.species == 123 && end.m in 1..3, "after a minute: the best catch and a place ($end)")
+        check(crowd.wildOut().none { it.person.species == 123 }, "the bugs go back in")
+
+        // the Unown hunt: tap each faint Unown
+        check(games.start(MapGames.Game.UNOWN, tg), "the Unown hunt starts")
+        var faintSeen = false
+        var done: MapGames.Line? = null
+        run(120_000) {
+            crowd.walkers.firstOrNull { it.faint && !it.leaving && tg - it.bornAt > 800 }?.let {
+                faintSeen = faintSeen || it.pose(tg).alpha < 0.7f
+                games.tap(it, null, false, tg)
+            }
+            if (done == null && games.lineAt(tg)?.what == MapGames.What.UNOWN_DONE) done = games.lineAt(tg)
+        }
+        check(faintSeen, "the Unown hide, faint")
+        check(done != null && done!!.word in MapGames.UNOWN_WORDS && done!!.n == done!!.word.length, "found them all, they spell a word (${done?.word})")
+
+        // the berry patch: plant, grow with steps, pick
+        games.steps = 10_000
+        check(games.berryStage() == -1, "nothing planted yet")
+        fun visit(): MapGames.Line? {
+            games.start(MapGames.Game.BERRY, tg)
+            var said: MapGames.Line? = null
+            run(15_000) { if (said == null && games.game == null) said = games.lineAt(tg) }
+            return said
+        }
+        val planted = visit()
+        check(store.planted == 10_000L && planted?.what == MapGames.What.BERRY_PLANTED, "it walks over and plants a berry ($planted)")
+        games.steps = 10_350
+        check(games.berryStage() == 1, "it grows with the steps (350 steps: a plant)")
+        val growing = visit()
+        check(growing?.let { it.what == MapGames.What.BERRY_GROWING && it.m == 550 } == true, "not ready yet: 550 more steps ($growing)")
+        games.steps = 11_000
+        check(games.berryStage() == 3, "900 steps: berries")
+        val picked = visit()
+        check(picked?.what == MapGames.What.BERRY_PICKED && store.picked in 2..4 && store.planted == 11_000L, "picked, and planted again (${store.picked})")
+        val art = BerryArt.sprite(3, 0).frames[0]
+        check(art.count { it == 0xFF3C64D8.toInt() } > 10 && BerryArt.sprite(-1, 0).frames[0].none { it == 0xFF3C64D8.toInt() }, "the plant has its berries drawn on it")
+
+        // taps start games: on a wild one, tag; on the water, fishing
+        games.stop(tg)
+        val wild = crowd.spawnWild(crowd.wildKinds[0], tg, 20_000)
+        run(1_000)
+        if (wild != null) check(games.tap(wild, null, false, tg) && games.game == MapGames.Game.TAG, "a tap on a wild Pokémon is a game of tag")
+        games.stop(tg)
+        check(games.tap(null, scene.water.values.first(), false, tg) && games.game == MapGames.Game.FISHING, "a tap on the water is fishing")
+        games.stop(tg)
+        check(!pk.held, "stopping lets it go about again")
     }
 
     // ---- the cave course: only the real cave floor ----

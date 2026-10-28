@@ -77,7 +77,7 @@ python3 pokewalker-tests/cry/check.py /tmp/got.json /tmp/expect.json
 ## map (manual)
 
 The walker screen's route map (`NitroFiles.kt`, `SoftRenderer.kt`, `FieldMap.kt`,
-`FollowerSprites.kt`, `MapExplorer.kt`, `MapPeople.kt`) draws the place in the player's own
+`FollowerSprites.kt`, `MapExplorer.kt`, `MapPeople.kt`, `MapGames.kt`) draws the place in the player's own
 HeartGold/SoulSilver ROM that the walk's course looks like and lets the walking
 Pokémon wander it. `map/gen_map_rom.py` builds a small fake ROM with the field
 files laid out the same way, written from the format notes (no game data): map
@@ -88,7 +88,7 @@ area doesn't load, one a floating effect layer) and follower sprites with a shin
 palette, plus a sea patch with the game's texture swaps (`a/1/3/9`) and scroll
 (`a/1/4/0`), and the map's people (`a/0/3/2` events, sixteen-frame sprites): a
 wanderer, a trainer, a swimmer, someone hidden by a flag, an apricorn tree and
-someone with nowhere to stand. `MapTest.kt` checks which spot is picked, the colours drawn, which
+someone with nowhere to stand; a sign, a ledge, and Pokémon types (`a/0/0/2`). `MapTest.kt` checks which spot is picked, the colours drawn, which
 tiles the Pokémon may stand on and how high, that a cave counts only its own
 floor, the moving sea, the drifting ambience (clouds and petals by day, fireflies
 at night, grass shaken up), the sprite and the walking Pokémon read from the
@@ -96,13 +96,17 @@ walker's memory, hiding behind the house and in tall grass, and three minutes of
 wandering, being sent somewhere and walked by hand, and the people: who is shown,
 their frames, five minutes of them going about (staying near home, never sharing
 a tile with anyone), turning to the Pokémon when it faces them, and the swimmer
-without a shadow:
+without a shadow; the course's Pokémon and the ones caught read from the walker's
+memory, hopping down the ledge and reading the sign, swimming, flying and fading
+by type, the Pokémon caught following along, wild Pokémon coming out of the tall
+grass, the weather, and the games (fishing, tag, the Bug-Catching Contest, the
+Unown hunt and the berry patch) played through:
 
 ```sh
 python3 pokewalker-tests/map/gen_map_rom.py /tmp/map.nds /tmp/map_empty.nds
 P=app/src/main/java/me/magnum/melonds/pokewalker
 kotlinc -d /tmp/map.jar $P/NitroFiles.kt $P/SoftRenderer.kt $P/CryArchive.kt $P/FieldMap.kt \
-    $P/FollowerSprites.kt $P/MapExplorer.kt $P/MapAnimation.kt $P/MapAmbience.kt $P/MapPeople.kt \
+    $P/FollowerSprites.kt $P/MapExplorer.kt $P/MapAnimation.kt $P/MapAmbience.kt $P/MapPeople.kt $P/MapGames.kt \
     pokewalker-tests/map/MapTest.kt
 java -cp /tmp/map.jar:$KOTLIN_HOME/lib/kotlin-stdlib.jar MapTestKt /tmp/map.nds /tmp/map_empty.nds
 ```
