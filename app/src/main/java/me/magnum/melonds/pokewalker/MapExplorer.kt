@@ -31,10 +31,30 @@ class MapWanderer(val scene: FieldMap.Scene, private val random: Random = Random
         val alpha: Float = 1f,
         /** How many pixels it's lowered into the ground, sitting or lying down (what goes under isn't drawn). */
         val sink: Int = 0,
+        /** Pixels it's drawn to the side of its spot (a shake). */
+        val dx: Int = 0,
+        /** How tall it's drawn (1: as it is; more, stretching up), its feet where they are. */
+        val stretch: Float = 1f,
     )
 
     /** What it just did that the map shows (an emote, a puff of dust), since last taken. */
-    enum class Happening { SNIFF, READ, LANDED }
+    enum class Happening { SNIFF, READ, LANDED, SHOOK, DUG }
+
+    /** Little things it does now and then, standing about. */
+    enum class Trick {
+        /** Stretches up tall. */
+        STRETCH,
+        /** Turns round on the spot. */
+        SPIN,
+        /** Shakes itself off (out of the water, in the rain). */
+        SHAKE,
+        /** Digs at the ground. */
+        DIG,
+        /** Looks up at the sky. */
+        LOOK_UP,
+        /** Hops up and down, pleased. */
+        BOUNCE,
+    }
 
     /** How it gets to the tile it's heading for. */
     enum class Move { WALK, JUMP, FLY, FADE }
@@ -45,8 +65,8 @@ class MapWanderer(val scene: FieldMap.Scene, private val random: Random = Random
         const val HOP_MS = 380L
         /** How high a hop goes, in world units (about picture pixels). */
         const val HOP_HEIGHT = 9.0
-        /** After being walked about by hand, how long before it goes off on its own again. */
-        const val MANUAL_MS = 6_000L
+        /** After being walked about by hand (or sent somewhere), how long before it goes off on its own again. */
+        const val MANUAL_MS = 8_000L
         /** Hopping down a ledge: two tiles, a little arc. */
         const val JUMP_MS = 520L
         const val JUMP_HEIGHT = 12.0
@@ -65,6 +85,12 @@ class MapWanderer(val scene: FieldMap.Scene, private val random: Random = Random
 
         private val DX = intArrayOf(0, 0, -1, 1) // UP, DOWN, LEFT, RIGHT (FollowerSprites order)
         private val DY = intArrayOf(-1, 1, 0, 0)
+
+        /** Turning round: down, left, up, right. */
+        private val SPIN_ORDER = intArrayOf(FollowerSprites.DOWN, FollowerSprites.LEFT, FollowerSprites.UP, FollowerSprites.RIGHT)
+
+        /** How long each [Trick] takes. */
+        private val TRICK_MS = longArrayOf(1_100, 880, 700, 1_400, 1_800, 1_100)
 
         fun towards(from: FieldMap.Tile, t: FieldMap.Tile) = when {
             abs(t.gx - from.gx) >= abs(t.gy - from.gy) && t.gx > from.gx -> FollowerSprites.RIGHT
@@ -101,6 +127,11 @@ class MapWanderer(val scene: FieldMap.Scene, private val random: Random = Random
     private var rushUntil = Long.MIN_VALUE
     private var nibbleStart = Long.MIN_VALUE
     private var nibbleUntil = Long.MIN_VALUE
+    private var steeredUntil = Long.MIN_VALUE
+    private var trick: Trick? = null
+    private var trickStart = Long.MIN_VALUE
+    private var trickMs = 0L
+    private var trickFacing = FollowerSprites.DOWN
 
     /** What it did since last taken (bounded: the oldest go when nobody takes them). */
     val happenings = ArrayList<Happening>()
@@ -131,6 +162,7 @@ class MapWanderer(val scene: FieldMap.Scene, private val random: Random = Random
                 reading = false
                 heldDirection = -1
                 queuedDirection = -1
+                trick = null
             }
         }
 
@@ -248,6 +280,24 @@ class MapWanderer(val scene: FieldMap.Scene, private val random: Random = Random
         // eating: little bobs
         if (now in nibbleStart until nibbleUntil) hop = maxOf(hop, abs(sin(PI * (now - nibbleStart) / 320.0)) * 2.5)
         hop = maxOf(hop, arc)
+        // a trick it's doing, standing about
+        var face = facing
+        var dx = 0
+        var stretch = 1f
+        var shown = frame
+        val tr = trick
+        if (tr != null && n == null && !asleep && now >= trickStart && now < trickStart + trickMs) {
+            val age = now - trickStart
+            val u = age.toDouble() / trickMs
+            when (tr) {
+                Trick.STRETCH -> stretch = 1f + 0.16f * sin(PI * u).toFloat()
+                Trick.SPIN -> face = SPIN_ORDER[(SPIN_ORDER.indexOf(trickFacing) + (age / 110).toInt()) % 4]
+                Trick.SHAKE -> { dx = if ((age / 45) % 2 == 0L) -1 else 1; hop = maxOf(hop, 1.0) }
+                Trick.DIG -> { shown = ((age / 90) % 2).toInt(); hop = maxOf(hop, abs(sin(PI * age / 180.0)) * 1.5) }
+                Trick.LOOK_UP -> face = FollowerSprites.UP
+                Trick.BOUNCE -> hop = maxOf(hop, abs(sin(PI * age / 260.0)) * 5.0)
+            }
+        }
         // lying down asleep (breathing), or sitting down to rest
         val sink = when {
             n != null || water || hop > 0.5 -> 0
@@ -255,9 +305,34 @@ class MapWanderer(val scene: FieldMap.Scene, private val random: Random = Random
             mood < 0 && now - (stepStart + stepMs) > SIT_AFTER_MS -> 2
             else -> 0
         }
-        return Pose(x, y, z, facing, frame, hop, n != null && move != Move.FADE,
-            grass = on.tallGrass && !water, inWater = water && arc < 4, aloft = aloft, alpha = alpha, sink = sink)
+        return Pose(x, y, z, face, shown, hop, n != null && move != Move.FADE,
+            grass = on.tallGrass && !water, inWater = water && arc < 4, aloft = aloft, alpha = alpha, sink = sink, dx = dx, stretch = stretch)
     }
+
+    /**
+     * Does [t] where it stands for [ms] (it stays put meanwhile); false when it's busy walking,
+     * asleep or kept where it is.
+     */
+    fun perform(t: Trick, now: Long, ms: Long = TRICK_MS[t.ordinal]): Boolean {
+        if (next != null || asleep) return false
+        trick = t
+        trickStart = now
+        trickMs = ms
+        trickFacing = facing
+        pauseUntil(now + ms + 300)
+        when (t) {
+            Trick.SHAKE -> happened(Happening.SHOOK)
+            Trick.DIG -> happened(Happening.DUG)
+            else -> {}
+        }
+        return true
+    }
+
+    /** The trick it's doing at [now], if any. */
+    fun trickAt(now: Long): Trick? = trick?.takeIf { next == null && now >= trickStart && now < trickStart + trickMs }
+
+    /** Whether it's being walked about by hand right now (it goes back to roaming [MANUAL_MS] after the last press). */
+    fun steered(now: Long) = now < steeredUntil
 
     private fun isWater(t: FieldMap.Tile) = scene.tile(t.gx, t.gy) == null && scene.water.containsKey(FieldMap.Scene.key(t.gx, t.gy))
 
@@ -314,6 +389,7 @@ class MapWanderer(val scene: FieldMap.Scene, private val random: Random = Random
         // from the tile it's stepping onto, if it's on its way somewhere
         val route = route(next ?: at, target, 80) ?: return false
         manualUntil = now + MANUAL_MS
+        trick = null
         heldDirection = -1
         queuedDirection = -1
         path.clear()
@@ -335,6 +411,8 @@ class MapWanderer(val scene: FieldMap.Scene, private val random: Random = Random
      */
     fun walk(direction: Int, held: Boolean, now: Long) {
         manualUntil = now + MANUAL_MS
+        steeredUntil = now + MANUAL_MS
+        trick = null
         path.clear()
         onTrip = false
         lookAt = null
@@ -352,6 +430,17 @@ class MapWanderer(val scene: FieldMap.Scene, private val random: Random = Random
     fun release() {
         heldDirection = -1
     }
+
+    /** Stops being walked about by hand: it goes back to roaming on its own after a moment. */
+    fun letGo(now: Long) {
+        heldDirection = -1
+        queuedDirection = -1
+        steeredUntil = Long.MIN_VALUE
+        manualUntil = minOf(manualUntil, now + 600)
+    }
+
+    /** The tile in front of it (the way it's facing), if there's one it could stand on or something there. */
+    fun facingTile(): Pair<Int, Int> = (at.gx + DX[facing]) to (at.gy + DY[facing])
 
     // ---- making up its mind -------------------------------------------------------------------
 
@@ -860,23 +949,30 @@ class MapSpritePainter(val scene: FieldMap.Scene, val sprite: FollowerSprites.Sp
             if (bx in 0 until bufferWidth && by in 0 until bufferHeight) buffer[by * bufferWidth + bx] = shade(0x48000000, alpha * if (pose.aloft) 0.6f else 1f)
         }
 
-        // the Pokémon, feet on the spot
+        // the Pokémon, feet on the spot (stretched up from its feet, or shaken to the side)
         val frame = sprite.frame(pose.facing, pose.frame)
-        spriteLeft = ax - size / 2
+        spriteLeft = ax - size / 2 + pose.dx
         spriteTop = ay + 1 + feet - size - pose.hop.roundToInt() + pose.sink
+        val stretch = pose.stretch.coerceIn(0.5f, 1.5f)
+        val drawn = if (stretch == 1f) size else (size * stretch).roundToInt().coerceIn(1, size + MapWanderer.MAX_LIFT / 2)
+        val bottomRow = spriteTop + size - 1
         var any = false
-        for (y in 0 until size) for (x in 0 until size) {
-            val c = frame[y * size + x]
-            if (c ushr 24 == 0) continue
-            val px = spriteLeft + x
-            val py = spriteTop + y
+        for (d in 0 until drawn) {
+            val fromBottom = drawn - 1 - d
+            val y = if (drawn == size) d else size - 1 - (fromBottom / stretch).toInt().coerceIn(0, size - 1)
+            val py = bottomRow - fromBottom
             if (py > cutLine) continue
-            if (pose.aloft) { if (px !in 0 until w || py !in 0 until h) continue } else if (!visible(px, py)) continue
-            val bx = px - left
-            val by = py - top
-            if (bx in 0 until bufferWidth && by in 0 until bufferHeight) {
-                buffer[by * bufferWidth + bx] = if (alpha >= 1f) c else shade(c, alpha)
-                any = true
+            for (x in 0 until size) {
+                val c = frame[y * size + x]
+                if (c ushr 24 == 0) continue
+                val px = spriteLeft + x
+                if (pose.aloft) { if (px !in 0 until w || py !in 0 until h) continue } else if (!visible(px, py)) continue
+                val bx = px - left
+                val by = py - top
+                if (bx in 0 until bufferWidth && by in 0 until bufferHeight) {
+                    buffer[by * bufferWidth + bx] = if (alpha >= 1f) c else shade(c, alpha)
+                    any = true
+                }
             }
         }
         // a ring of water where it swims

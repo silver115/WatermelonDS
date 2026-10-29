@@ -1,0 +1,5 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24" android:tint="#FFFFFF">
+    <!-- a D-pad: the Pokémon is being walked about by hand -->
+    <path android:fillColor="@android:color/white"
+        android:pathData="M9.5,2.5L14.5,2.5L14.5,9.5L21.5,9.5L21.5,14.5L14.5,14.5L14.5,21.5L9.5,21.5L9.5,14.5L2.5,14.5L2.5,9.5L9.5,9.5Z" />
+</vector>

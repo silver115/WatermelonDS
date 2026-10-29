@@ -111,15 +111,41 @@ dust, sparkles, the item ball) and life on the map: an item ball turning up wher
 the map keeps one and being fetched, a tossed berry run over to and eaten, falling
 asleep at night and waking on a tap or new steps, moods from today's steps, birds
 flying over, a Magikarp leaping, a shiny Pokémon sparkling, and the emote bubbles
-of the Pokémon and the people:
+of the Pokémon and the people. `MapPlayTest.kt` (run from the same main) adds the
+bigger picture the app draws (the view in its middle looks just the same), trees
+to headbutt, cracked rocks and places to hide; the Pokémon walked about by hand
+(the AYN Thor's D-pad) and roaming again 8 seconds after; its little tricks; the
+newer games played through (rustling grass and dowsing with the walker's real
+rewards, hide and seek, headbutting a tree, smashing a rock, catching what falls);
+the little lives about the map (butterflies, birds, fish, dew, shooting stars, a
+rainbow) and the special dates (Halloween pumpkins and wisps, autumn leaves,
+fireworks, snow, hearts); today's visitor; and reading the Thor and its controls:
 
 ```sh
 python3 pokewalker-tests/map/gen_map_rom.py /tmp/map.nds /tmp/map_empty.nds
 P=app/src/main/java/me/magnum/melonds/pokewalker
 kotlinc -d /tmp/map.jar $P/NitroFiles.kt $P/SoftRenderer.kt $P/CryArchive.kt $P/FieldMap.kt $P/MapProps.kt \
     $P/FollowerSprites.kt $P/MapExplorer.kt $P/MapAnimation.kt $P/MapAmbience.kt $P/MapPeople.kt $P/MapGames.kt \
-    $P/MapEffects.kt $P/MapLife.kt pokewalker-tests/map/MapTest.kt
+    $P/MapEffects.kt $P/MapLife.kt $P/MapPlay.kt $P/PadInput.kt $P/MapCritters.kt $P/MapVisitor.kt $P/RouteMusic.kt \
+    pokewalker-tests/map/MapPlayTest.kt pokewalker-tests/map/MapTest.kt
 java -cp /tmp/map.jar:$KOTLIN_HOME/lib/kotlin-stdlib.jar MapTestKt /tmp/map.nds /tmp/map_empty.nds
+```
+
+## music (manual)
+
+The route music (`RouteMusic.kt`) plays the game's own sequenced music for the
+course from the ROM's sound archive, with a port of the DS sound driver's tracks
+and channels. `music/gen_music_rom.py` builds a ROM with a small sound archive of
+its own (sequences, a bank, a wave archive: no game data), and `MusicTest.kt`
+checks the notes, tempo, panning, loops, calls, variables, envelopes and the
+sequence chosen for each course:
+
+```sh
+python3 pokewalker-tests/music/gen_music_rom.py /tmp/music.nds
+P=app/src/main/java/me/magnum/melonds/pokewalker
+kotlinc -d /tmp/music.jar $P/CryArchive.kt $P/NitroFiles.kt $P/SoftRenderer.kt $P/FieldMap.kt $P/MapProps.kt \
+    $P/MapAnimation.kt $P/MapPeople.kt $P/MapExplorer.kt $P/FollowerSprites.kt $P/RouteMusic.kt pokewalker-tests/music/MusicTest.kt
+java -cp /tmp/music.jar:$KOTLIN_HOME/lib/kotlin-stdlib.jar MusicTestKt /tmp/music.nds
 ```
 
 ## game_trace_test (runs in CI)

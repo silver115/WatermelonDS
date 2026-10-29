@@ -32,8 +32,10 @@ The fake world:
   - sand at x 4-5, y 15-18 and puddles at x 4-5, y 19-20 of block 0, and an item ball
     (sprite 87) at (36, 11);
   - the game's field effects (`a/1/0/3`): emote bubbles, splash, dust, ripples, sparkles,
-    footprints, each drawn here as plain marks, where the game has them, but the item ball,
-    which is further on (to be found by name).
+    footprints, grass shaking, each drawn here as plain marks, where the game has them, but
+    the item ball, which is further on (to be found by name);
+  - two trees (tile behaviour 6, blocked) at x 16-17, y 6 of block 0 with open ground in front
+    of them, and a cracked rock (sprite 85, its picture mmodel 92) at (38, 7).
 """
 import struct, sys
 
@@ -409,6 +411,7 @@ def perms_block0():
         for x in range(4, 6): put(x, y, 0x21)                    # sand
     for y in range(19, 21):
         for x in range(4, 6): put(x, y, 0x16)                    # puddles
+    for x in range(16, 18): put(x, 6, 0x06, 0x80)                # trees to headbutt
     return perms
 
 def perms_cave():
@@ -449,6 +452,7 @@ def follower_btx():
 # sprite numbers (the game's sprite table) of the people's overworld sprites
 SPRITE_WOMAN, SPRITE_MAN, SPRITE_SWIMMER, SPRITE_TREE = 0x145, 0x14C, 0x156, 0x106   # mmodel 123, 130, 138, 251
 SPRITE_ITEM_BALL = 87
+SPRITE_BREAKROCK = 85
 ROUTE29_EVENTS = 30
 
 def person_btx(name, colour):
@@ -610,6 +614,9 @@ def field_effects():
         feet = [(5, 4 + k), (5, 5 + k), (10, 8), (10, 9)]
         members[74 + k] = fx_btx('f_mark_' + d, 16, 16, 2, [feet], [rgb(160, 120, 70), rgb(140, 100, 60)], plain=True)
         members[90 + k] = fx_btx('nf_mark_' + d, 16, 16, 2, [feet], [rgb(230, 240, 255), rgb(200, 210, 230)], plain=True)
+    # tall grass shaking: blades, lower each frame
+    members[25] = fx_btx('kusaeff', 32, 32, 2, [[(x, y) for x in range(9, 23, 3) for y in range(30 - 12 + k * 3, 31)] for k in range(4)],
+                         [rgb(80, 200, 120), rgb(40, 140, 80)])
     # the item ball, not where the game has it
     ball = [(x, y) for y in range(4, 13) for x in range(4, 13) if (x - 8) ** 2 + (y - 8) ** 2 <= 16]
     members[40] = fx_btx('monstarball', 16, 16, 3, [ball], [rgb(232, 40, 40), dark], plain=True)
@@ -678,6 +685,7 @@ def build():
     members[130] = person_btx('gsbigman', rgb(80, 120, 220))
     members[138] = person_btx('gsswimmerm', rgb(240, 200, 160))
     members[251] = static_btx('bonguri', 7)
+    members[92] = static_btx('breakrock', 1)
     files['a/0/8/1'] = narc(members, shared={i: 297 for i in range(298, count)})
     # people: Route 29's events (the others are empty)
     route29 = event_file([
@@ -688,6 +696,7 @@ def build():
         (SPRITE_TREE, 0, 0, 0, 1, 0, 0, 32 + 11, 8),          # an apricorn tree: not a person
         (SPRITE_MAN, 0, 0, 0, 1, 0, 0, 32 + 2, 2),            # up on the rocks: nowhere to stand
         (SPRITE_ITEM_BALL, 0, 3, 0x2F0, 0, 0, 0, 32 + 4, 11), # an item ball (hidden once picked up in the game)
+        (SPRITE_BREAKROCK, 0, 0, 0, 0, 0, 0, 32 + 6, 7),      # a cracked rock to smash
     ], bgs=[(1, 32 + 15, 21), (2, 32 + 7, 10)],               # a sign on the front of the house; a hidden item
        warps=[(32 + 16, 21)])                                  # the house's door
     empty_events = event_file([])

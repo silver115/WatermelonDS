@@ -4,13 +4,17 @@ import kotlin.math.abs
 import kotlin.random.Random
 
 /**
- * Little games on the route map, all just for fun (nothing goes to the walker or the game):
+ * Little games on the route map:
  *  - fishing: the Pokémon goes to the water's edge and casts; tap when something bites;
  *  - tag: a wild Pokémon runs off and the Pokémon chases it;
  *  - a Bug-Catching Contest: a minute of tapping the bugs that come out of the tall grass;
  *  - an Unown hunt in caves: Unown hide, faint, one letter at a time; find them to spell a word;
- *  - a berry patch: plant a berry that grows as you walk (real steps), and pick it when it's ready.
- * What happens is told in [line]s for the screen to put in words. Pure Kotlin.
+ *  - a berry patch: plant a berry that grows as you walk (real steps), and pick it when it's ready;
+ *  - and the ones in [MapPlay]: rustling grass and dowsing (the walker's own Poké Radar and
+ *    dowsing, with real catches and finds: [rewards]), hide and seek, headbutting trees, smashing
+ *    rocks, and catching what falls.
+ * All but the walker's two are just for fun (nothing goes to the walker or the game). What
+ * happens is told in [line]s for the screen to put in words. Pure Kotlin.
  */
 class MapGames(
     val scene: FieldMap.Scene,
@@ -18,7 +22,7 @@ class MapGames(
     private val crowd: MapCrowd,
     private val random: Random = Random.Default,
 ) {
-    enum class Game { FISHING, TAG, CONTEST, UNOWN, BERRY }
+    enum class Game { FISHING, TAG, CONTEST, UNOWN, BERRY, RUSTLING, DOWSING, HIDE_SEEK, HEADBUTT, ROCK_SMASH, CATCH }
 
     enum class What {
         FISH_WALK, FISH_WAIT, FISH_BITE, FISH_CAUGHT, FISH_AWAY, FISH_NOWHERE,
@@ -28,6 +32,20 @@ class MapGames(
         BERRY_PLANTED, BERRY_GROWING, BERRY_PICKED, BERRY_NOWHERE,
         /** From [MapLife]: an item ball picked up ([Line.n]: the item), a berry eaten ([Line.n]: which), one it couldn't get to. */
         ITEM_FOUND, TREAT_EATEN, TREAT_NOWHERE,
+        /** Rustling grass ([Line.species] the walker's Pokémon, [Line.n] its level). */
+        RUSTLE_ON, RUSTLE_PICK, RUSTLE_WAIT, RUSTLE_WRONG, RUSTLE_MISSED, RUSTLE_APPEARED, RUSTLE_THROW, RUSTLE_CAUGHT,
+        RUSTLE_BROKE_FREE, RUSTLE_FLED, RUSTLE_NOWHERE,
+        /** Dowsing ([Line.n]: steps left, or the item). */
+        DOWSE_ON, DOWSE_WARMER, DOWSE_COLDER, DOWSE_SAME, DOWSE_HOT, DOWSE_DIG, DOWSE_FOUND, DOWSE_NONE, DOWSE_NOWHERE,
+        HIDE_ON, HIDE_FOUND, HIDE_OVER, HIDE_NOWHERE,
+        HEADBUTT_POKEMON, HEADBUTT_BERRY, HEADBUTT_NOTHING, HEADBUTT_NOWHERE,
+        SMASH_ITEM, SMASH_POKEMON, SMASH_NOTHING, SMASH_NOWHERE,
+        /** Catch the falling ([Line.n]: points, [Line.m]: seconds left or the best). */
+        CATCH_ON, CATCH_END,
+        /** The walker's say on a radar catch or a find: stored ([Line.species] / [Line.n]), or not ([Line.word]: why). */
+        WALKER_CAUGHT, WALKER_FOUND, WALKER_ERROR,
+        /** Today's visitor came by, and went. */
+        VISITOR_HI, VISITOR_BYE,
     }
 
     /** Something to tell the player: [what], about [species] (0: none), with numbers [n] and [m] and a [word]. */
@@ -38,6 +56,17 @@ class MapGames(
         var planted: Long
         var kind: Int
         var picked: Int
+    }
+
+    /** Where the catching game's best score is kept. */
+    interface ScoreStore {
+        var best: Int
+    }
+
+    /** Something real a game won: a Pokémon caught in the rustling grass, an item dowsed (for the walker to keep). */
+    sealed class Reward {
+        class Caught(val slot: Int, val species: Int) : Reward()
+        class Dowsed(val item: Int) : Reward()
     }
 
     /** A fish leaping out of the water: its sprite, where, since when. */
@@ -55,6 +84,8 @@ class MapGames(
         /** The bugs of the contest and how many points each is worth at best (src/bug_contest.c scores by rarity and level). */
         val BUGS = intArrayOf(10, 11, 12, 13, 14, 15, 46, 48, 123, 127)
         private val BUG_POINTS = intArrayOf(30, 34, 52, 30, 34, 52, 48, 48, 72, 72)
+        /** The games [MapPlay] runs. */
+        val PLAYED = setOf(Game.RUSTLING, Game.DOWSING, Game.HIDE_SEEK, Game.HEADBUTT, Game.ROCK_SMASH, Game.CATCH)
     }
 
     // what the game has to work with, set by whoever draws the map
@@ -75,8 +106,33 @@ class MapGames(
     var line: Line? = null
         private set
     private var lineUntil = 0L
+    private var lineFrom = 0L
+    /** When [line] shows from (something said a moment ahead). */
+    val lineStart get() = lineFrom
     /** Species whose cry should play (a catch), since last asked. */
     val cries = ArrayList<Int>()
+    /** What the walker should keep (taken by whoever stores it). */
+    val rewards = ArrayList<Reward>()
+    /** Things to do a moment from now. */
+    private val pending = ArrayList<Pair<Long, (Long) -> Unit>>()
+
+    /** The newer games. */
+    val play = MapPlay(this, scene, pokemon, crowd, random)
+
+    internal fun reward(r: Reward) {
+        rewards.add(r)
+    }
+
+    /** Does [action] at [at] (on an update). */
+    internal fun later(at: Long, action: (Long) -> Unit) {
+        pending.add(at to action)
+    }
+
+    /** The game that's on is over (it tidied up after itself). */
+    internal fun end(now: Long) {
+        game = null
+        crowd.wildPaused = false
+    }
 
     // fishing
     private var phase = 0
@@ -110,15 +166,53 @@ class MapGames(
     private var unown: MapCrowd.Walker? = null
     private var nextUnownAt = 0L
 
-    /** The games there are here. */
-    fun available(): List<Game> {
+    /** The games there are here (at [now]: rocks come and go). */
+    fun available(now: Long = 0L): List<Game> {
         val out = ArrayList<Game>()
         if (fishKinds.isNotEmpty() && shoreTiles.isNotEmpty()) out.add(Game.FISHING)
         if (crowd.wildKinds.isNotEmpty()) out.add(Game.TAG)
         if (bugKinds.isNotEmpty() && scene.outdoor && scene.tiles.values.count { it.tallGrass } >= 8) out.add(Game.CONTEST)
         if (unownModels.size >= 26) out.add(Game.UNOWN)
         if (berryTile != null && berryStore != null) out.add(Game.BERRY)
+        if (play.canRustle()) out.add(Game.RUSTLING)
+        if (play.canDowse()) out.add(Game.DOWSING)
+        if (play.canHide()) out.add(Game.HIDE_SEEK)
+        if (play.canHeadbutt()) out.add(Game.HEADBUTT)
+        if (play.canSmash(now)) out.add(Game.ROCK_SMASH)
+        if (play.canCatch()) out.add(Game.CATCH)
         return out
+    }
+
+    /** Rustling grass for the walker's Poké Radar [e] (the walker already picked it and took the watts). */
+    fun startRustling(e: MapPlay.Encounter, now: Long): Boolean {
+        stop(now)
+        game = Game.RUSTLING
+        if (!play.startRustling(e, now)) { game = null; crowd.wildPaused = false; return false }
+        return true
+    }
+
+    /** Dowsing for the walker's [item] (it already picked it and took the watts). */
+    fun startDowsing(item: Int, now: Long): Boolean {
+        stop(now)
+        game = Game.DOWSING
+        if (!play.startDowsing(item, now)) { game = null; return false }
+        return true
+    }
+
+    /** Headbutts [tree] now. */
+    fun headbutt(tree: FieldMap.Tree, now: Long): Boolean {
+        stop(now)
+        game = Game.HEADBUTT
+        if (!play.startHeadbutt(tree, now)) { game = null; return false }
+        return true
+    }
+
+    /** Smashes [rock] now. */
+    fun smash(rock: MapPlay.Rock, now: Long): Boolean {
+        stop(now)
+        game = Game.ROCK_SMASH
+        if (!play.startSmash(rock, now)) { game = null; return false }
+        return true
     }
 
     /** Ground beside the water. */
@@ -136,40 +230,52 @@ class MapGames(
         return null
     }
 
-    private fun say(l: Line, now: Long, ms: Long = 4_000) {
+    internal fun say(l: Line, now: Long, ms: Long = 4_000) {
         line = l
+        lineFrom = now
         lineUntil = now + ms
     }
 
     /** What to show now (null: nothing). */
-    fun lineAt(now: Long): Line? = if (game != null || now < lineUntil) line else null
+    fun lineAt(now: Long): Line? = if (now >= lineFrom && (game != null || now < lineUntil)) line else null
 
     /** Shows [l] for [ms] (something that happened on the map besides the games). */
     fun announce(l: Line, now: Long, ms: Long = 5_000) {
         if (game == null) say(l, now, ms)
     }
 
-    /** Starts [g] (stopping whatever was going on); false when it can't be played here. */
+    /**
+     * Starts [g] (stopping whatever was going on); false when it can't be played here. Rustling
+     * grass and dowsing need the walker's say first: see [startRustling] and [startDowsing].
+     */
     fun start(g: Game, now: Long): Boolean {
-        if (g !in available()) return false
+        if (g !in available(now)) return false
         stop(now)
-        return when (g) {
+        val started = when (g) {
             Game.FISHING -> startFishing(null, now)
             Game.TAG -> startTag(null, now)
             Game.CONTEST -> startContest(now)
             Game.UNOWN -> startUnown(now)
             Game.BERRY -> visitBerry(now)
+            Game.RUSTLING, Game.DOWSING -> false
+            Game.HIDE_SEEK -> { game = g; play.startHiding(now) }
+            Game.HEADBUTT -> { game = g; play.startHeadbutt(null, now) }
+            Game.ROCK_SMASH -> { game = g; play.startSmash(null, now) }
+            Game.CATCH -> { game = g; play.startCatching(now) }
         }
+        if (!started && game == g && g in PLAYED) { game = null; crowd.wildPaused = false; pokemon.held = false }
+        return started
     }
 
     /** Stops the game that's on. */
     fun stop(now: Long) {
-        when (game) {
+        when (val g = game) {
             Game.FISHING -> { pokemon.held = false; bobber = null; biting = false }
             Game.TAG -> target?.let { it.flee = false; crowd.leave(it, now) }
             Game.CONTEST -> { for (b in bugsOut) crowd.leave(b, now); bugsOut.clear() }
             Game.UNOWN -> unown?.let { crowd.leave(it, now) }
-            else -> {}
+            null -> {}
+            else -> if (g in PLAYED) play.stop(g, now)
         }
         crowd.wildPaused = false
         target = null
@@ -181,9 +287,12 @@ class MapGames(
 
     /**
      * A tap: on [walker] (someone in the crowd), on the water at [water], on the berry patch
-     * ([onBerry]) or elsewhere. True when the game took it (the Pokémon shouldn't walk there).
+     * ([onBerry]), on [ground], or elsewhere. True when the game took it (the Pokémon shouldn't
+     * walk there).
      */
-    fun tap(walker: MapCrowd.Walker?, water: FieldMap.Tile?, onBerry: Boolean, now: Long): Boolean {
+    fun tap(walker: MapCrowd.Walker?, water: FieldMap.Tile?, onBerry: Boolean, now: Long, ground: FieldMap.Tile? = null): Boolean {
+        val g = game
+        if (g != null && g in PLAYED) return play.tap(g, walker, ground, now)
         when (game) {
             Game.FISHING -> {
                 if (phase == 2 && biting) { catchFish(now); return true }
@@ -199,33 +308,48 @@ class MapGames(
                 return false
             }
             Game.TAG, Game.BERRY -> return false
-            null -> {}
+            else -> {}
         }
         // no game on: a tap on a wild Pokémon is a game of tag, on the water fishing, on the patch the berry
-        if (walker != null && walker.wild && !walker.leaving && crowd.wildKinds.isNotEmpty()) return startTag(walker, now)
+        if (walker != null && walker.wild && !walker.leaving && crowd.wildKinds.isNotEmpty() && walker !== play.radarWild) return startTag(walker, now)
         if (onBerry && berryTile != null && berryStore != null) return visitBerry(now)
         if (water != null && fishKinds.isNotEmpty() && shoreTiles.isNotEmpty()) return startFishing(water, now)
         return false
     }
 
-    /** The A button: reels in a bite. True when the game took it. */
+    /** The A button: reels in a bite, throws a ball. True when the game took it. */
     fun action(now: Long): Boolean {
         if (game == Game.FISHING && phase == 2 && biting) { catchFish(now); return true }
+        val g = game
+        if (g != null && g in PLAYED && play.action(g, now)) return true
         return false
+    }
+
+    /** Fishing from where the Pokémon stands, at [water] beside it (the A button facing the water). */
+    fun fishHere(water: FieldMap.Tile, now: Long): Boolean {
+        if (fishKinds.isEmpty() || shoreTiles.isEmpty()) return false
+        stop(now)
+        return startFishing(water, now)
     }
 
     // ---- moving the games along ----------------------------------------------------------------------
 
     fun update(now: Long) {
         leap?.let { if (now - it.start > LEAP_MS) leap = null }
+        if (pending.isNotEmpty()) {
+            val due = pending.filter { now >= it.first }
+            pending.removeAll(due)
+            for ((_, action) in due) action(now)
+        }
         when (game) {
             Game.FISHING -> fishing(now)
             Game.TAG -> tag(now)
             Game.CONTEST -> contest(now)
             Game.UNOWN -> unownHunt(now)
             Game.BERRY -> berry(now)
-            null -> {}
+            else -> {}
         }
+        play.update(game, now)
     }
 
     // fishing: 0 walking to the water, 1 waiting for a bite, 2 a bite, 3 caught (the fish leaps)

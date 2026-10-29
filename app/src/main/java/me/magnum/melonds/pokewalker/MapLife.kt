@@ -112,8 +112,10 @@ class MapLife(
     var buddySize = 32
     /** Whether something can be put on a tile (nobody's there, it's not the berry patch). */
     var free: (FieldMap.Tile) -> Boolean = { true }
-    /** Tiles behind the cards on the screen (nothing turns up there). */
+    /** Tiles out of sight (behind the cards on the screen, out of view): nothing turns up there. */
     var hidden: ((FieldMap.Tile) -> Boolean)? = null
+    /** The part of the picture in view now (left, top, right, bottom). */
+    var view: FloatArray = scene.view.copyOf()
 
     // ---- what's going on ----
     var ball: Ball? = null
@@ -155,6 +157,9 @@ class MapLife(
     private var nextSpotAt = 0L
     private val hopsAt = ArrayList<Long>()
     private var lastLine: MapGames.Line? = null
+    private var nextTrickAt = 0L
+    private var wasWet = false
+    private var nextChatterAt = 0L
     private val talking: MutableSet<MapCrowd.Walker> = Collections.newSetFromMap(IdentityHashMap())
     private val sightAgain = IdentityHashMap<MapCrowd.Walker, Long>()
 
@@ -291,9 +296,26 @@ class MapLife(
         passers(now)
         sparkles(now)
         people(now)
+        chatter(now)
         games(now)
         weather(now, weather)
+        tricks(now, minute, weather)
         emotes.prune(now)
+    }
+
+    /** Now and then someone about hums a tune, or has a little think, or smiles at the Pokémon nearby. */
+    private fun chatter(now: Long) {
+        if (now < nextChatterAt) return
+        nextChatterAt = now + 9_000 + random.nextInt(14_000)
+        val folk = crowd.walkers.filter { !it.wild && !it.talking && !it.person.swimming && hidden?.invoke(it.at) != true && !emotes.pending(it, now) }
+        val w = folk.randomOrNull(random) ?: return
+        val near = abs(w.at.gx - pokemon.at.gx) + abs(w.at.gy - pokemon.at.gy) <= 3
+        val e = when {
+            near && !asleep -> if (random.nextBoolean()) Emote.SMILE else Emote.GLAD
+            asleep -> Emote.SILENT
+            else -> arrayOf(Emote.NOTE, Emote.NOTE, Emote.SILENT, Emote.QUESTION, Emote.SMILE)[random.nextInt(5)]
+        }
+        emotes.show(w, e, now, 1_500)
     }
 
     private fun start(now: Long) {
@@ -314,16 +336,78 @@ class MapLife(
         nextSweatAt = now + 8_000 + random.nextInt(8_000)
     }
 
-    /** What the Pokémon did: a "?" sniffing, "..." reading a sign, dust landing from a jump. */
+    /** What the Pokémon did: a "?" sniffing, "..." reading a sign, dust landing from a jump, drops shaking off, dirt digging. */
     private fun happenings(now: Long) {
         for (h in pokemon.happenings) {
+            val at = pokemon.at
             when (h) {
                 MapWanderer.Happening.SNIFF -> if (random.nextInt(3) != 0) emotes.show(pokemon, Emote.QUESTION, now + 150, 1_300)
                 MapWanderer.Happening.READ -> emotes.show(pokemon, Emote.SILENT, now + 200, 1_800)
-                MapWanderer.Happening.LANDED -> effects.dust(pokemon.at.x, pokemon.at.y, pokemon.at.z, now)
+                MapWanderer.Happening.LANDED -> effects.dust(at.x, at.y, at.z, now)
+                MapWanderer.Happening.SHOOK -> { effects.splash(at.x, at.y, at.z, now + 120); effects.splash(at.x, at.y, at.z, now + 420) }
+                MapWanderer.Happening.DUG -> { effects.dust(at.x, at.y, at.z, now + 200); effects.dust(at.x, at.y, at.z, now + 700) }
             }
         }
         pokemon.happenings.clear()
+    }
+
+    /**
+     * Now and then, standing about, it does a little something: stretches (mornings), shakes
+     * itself off (out of the water, in the rain), looks up at the night sky, digs, turns round,
+     * or bounces when it's lively.
+     */
+    private fun tricks(now: Long, minute: Int, weather: MapAmbience.Weather) {
+        val at = pokemon.at
+        val wet = scene.tile(at.gx, at.gy) == null
+        if (asleep || games?.game != null || pokemon.held || treat != null) { wasWet = wet; return }
+        // just out of the water: a good shake
+        if (wasWet && !wet && pokemon.idle) {
+            wasWet = false
+            if (pokemon.perform(MapWanderer.Trick.SHAKE, now)) {
+                emotes.show(pokemon, Emote.SWEAT, now + 150, 900)
+                nextTrickAt = maxOf(nextTrickAt, now + 8_000)
+            }
+            return
+        }
+        wasWet = wet
+        if (now < nextTrickAt || !pokemon.idle || pokemon.steered(now) || wet || emotes.pending(pokemon, now)) return
+        nextTrickAt = now + 16_000 + random.nextInt(22_000)
+        val hour = Math.floorMod(minute, 24 * 60) / 60
+        val outside = scene.outdoor
+        val roll = random.nextInt(100)
+        val trick = when {
+            hour in 6..9 && roll < 45 -> MapWanderer.Trick.STRETCH
+            weather == MapAmbience.Weather.RAIN && roll < 50 -> MapWanderer.Trick.SHAKE
+            outside && (hour >= 20 || hour < 5) && weather == MapAmbience.Weather.CLEAR && roll < 40 -> MapWanderer.Trick.LOOK_UP
+            mood >= 1 && roll < 45 -> if (random.nextBoolean()) MapWanderer.Trick.BOUNCE else MapWanderer.Trick.SPIN
+            !at.tallGrass && roll < 60 -> MapWanderer.Trick.DIG
+            roll < 80 -> MapWanderer.Trick.SPIN
+            else -> MapWanderer.Trick.STRETCH
+        }
+        if (!pokemon.perform(trick, now)) return
+        when (trick) {
+            MapWanderer.Trick.STRETCH -> if (random.nextBoolean()) emotes.show(pokemon, Emote.SMILE, now + 900, 1_200)
+            MapWanderer.Trick.LOOK_UP -> emotes.show(pokemon, if (random.nextBoolean()) Emote.NOTE else Emote.SILENT, now + 600, 1_300)
+            MapWanderer.Trick.DIG -> if (random.nextInt(3) == 0) emotes.show(pokemon, Emote.QUESTION, now + 1_300, 1_100)
+            MapWanderer.Trick.BOUNCE -> emotes.show(pokemon, Emote.NOTE, now, 1_200)
+            else -> {}
+        }
+    }
+
+    /** Something bright went over (a shooting star): it looks up, amazed. */
+    fun lookUp(now: Long) {
+        if (asleep || games?.game != null || !pokemon.idle) return
+        if (pokemon.perform(MapWanderer.Trick.LOOK_UP, now, 1_600)) emotes.show(pokemon, Emote.EXCLAIM, now, 1_000)
+    }
+
+    /**
+     * A berry fell onto [tile] (out of a tree): it's there to eat, as if thrown (from where it
+     * lands, so it doesn't fly in).
+     */
+    fun drop(tile: FieldMap.Tile, kind: Int, now: Long) {
+        if (treat != null) return
+        val p = scene.project(tile.x, tile.y, tile.z) ?: return
+        treat = Treat(tile, kind.coerceIn(0, MapGames.BERRY_KINDS - 1), p[0], p[1], now - TOSS_MS)
     }
 
     private fun sleep(now: Long, minute: Int) {
@@ -527,21 +611,23 @@ class MapLife(
         effects.splash(w.x, w.y, w.z, now)
     }
 
-    /** A bird across the picture over a row of ground, high up, its shadow on the ground. */
+    /** A bird across the view over a row of ground, high up, its shadow on the ground. */
     private fun launchBird(now: Long) {
-        // over ground in the lower part of the picture, so the bird high above it is in the picture too
+        // over ground in the lower part of the view, so the bird high above it is in view too
+        val top = view[1] + (view[3] - view[1]) * 0.42f
+        val bottom = view[1] + (view[3] - view[1]) * 0.92f
         val rows = scene.tiles.values.filter { t ->
-            hidden?.invoke(t) != true && scene.project(t.x, t.y, t.z)?.let { it[1] in scene.height * 0.42f..scene.height * 0.92f } == true
+            hidden?.invoke(t) != true && scene.project(t.x, t.y, t.z)?.let { it[1] in top..bottom && it[0] in view[0]..view[2] } == true
         }
-        val row = rows.randomOrNull(random) ?: scene.tiles.values.randomOrNull(random) ?: return
+        val row = rows.randomOrNull(random) ?: return
         val p0 = scene.project(row.x, row.y, row.z) ?: return
         val p1 = scene.project(row.x + 16.0, row.y, row.z) ?: return
         val perUnit = (p1[0] - p0[0]) / 16.0
         if (perUnit < 0.05) return
-        val left = row.x + (-40.0 - p0[0]) / perUnit
-        val right = row.x + (scene.width + 40.0 - p0[0]) / perUnit
+        val left = row.x + (view[0] - 40.0 - p0[0]) / perUnit
+        val right = row.x + (view[2] + 40.0 - p0[0]) / perUnit
         val ltr = random.nextBoolean()
-        val ms = ((scene.width + 80) / BIRD_SPEED * 1000).toLong()
+        val ms = ((view[2] - view[0] + 80) / BIRD_SPEED * 1000).toLong()
         flyers.add(Flyer(birds[random.nextInt(birds.size)], if (ltr) left else right, if (ltr) right else left, row.y, row.z, now, ms))
     }
 
@@ -601,15 +687,20 @@ class MapLife(
         if (l === lastLine) return
         lastLine = l
         val e = when (l?.what) {
-            MapGames.What.FISH_CAUGHT, MapGames.What.TAG_CAUGHT, MapGames.What.CONTEST_END -> Emote.HAPPY
-            MapGames.What.CONTEST_CAUGHT, MapGames.What.BERRY_PLANTED -> Emote.NOTE
-            MapGames.What.UNOWN_FOUND -> Emote.EXCLAIM
-            MapGames.What.UNOWN_DONE, MapGames.What.BERRY_PICKED -> Emote.HEART
-            MapGames.What.FISH_AWAY, MapGames.What.TAG_AWAY, MapGames.What.CONTEST_NONE -> Emote.SAD
-            MapGames.What.FISH_NOWHERE, MapGames.What.BERRY_NOWHERE -> Emote.QUESTION
+            MapGames.What.FISH_CAUGHT, MapGames.What.TAG_CAUGHT, MapGames.What.CONTEST_END, MapGames.What.RUSTLE_CAUGHT,
+            MapGames.What.DOWSE_FOUND, MapGames.What.HIDE_FOUND, MapGames.What.CATCH_END -> Emote.HAPPY
+            MapGames.What.CONTEST_CAUGHT, MapGames.What.BERRY_PLANTED, MapGames.What.DOWSE_WARMER -> Emote.NOTE
+            MapGames.What.UNOWN_FOUND, MapGames.What.RUSTLE_APPEARED, MapGames.What.DOWSE_HOT, MapGames.What.HEADBUTT_POKEMON,
+            MapGames.What.SMASH_POKEMON -> Emote.EXCLAIM
+            MapGames.What.UNOWN_DONE, MapGames.What.BERRY_PICKED, MapGames.What.HEADBUTT_BERRY, MapGames.What.SMASH_ITEM -> Emote.HEART
+            MapGames.What.FISH_AWAY, MapGames.What.TAG_AWAY, MapGames.What.CONTEST_NONE, MapGames.What.RUSTLE_MISSED,
+            MapGames.What.RUSTLE_WRONG, MapGames.What.RUSTLE_BROKE_FREE, MapGames.What.RUSTLE_FLED, MapGames.What.DOWSE_NONE -> Emote.SAD
+            MapGames.What.FISH_NOWHERE, MapGames.What.BERRY_NOWHERE, MapGames.What.DOWSE_COLDER, MapGames.What.HEADBUTT_NOTHING,
+            MapGames.What.SMASH_NOTHING, MapGames.What.HIDE_OVER -> Emote.QUESTION
             else -> null
         } ?: return
-        emotes.show(pokemon, e, now, 1_500)
+        // what a game says a moment from now shows on its face then
+        emotes.show(pokemon, e, maxOf(now, g.lineStart), 1_500)
     }
 
     /** Caught in the rain now and then. */

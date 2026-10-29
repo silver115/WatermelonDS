@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Pokéwalker route map as a live wallpaper (RouteWallpaperService) -->
+<wallpaper xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/pokewalker_wallpaper_description"
+    android:thumbnail="@mipmap/ic_pokewalker_device" />

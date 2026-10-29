@@ -29,8 +29,9 @@ enum class Emote(val art: String) {
  * The game's own little field effects, read from the player's ROM (`a/1/0/3`,
  * data/fielddata/fldeff): the emote bubbles people show (`fuki_*`, two frames each), a splash
  * (`shibuki`, three frames), dust (`hero_kemu`, four), rings on water (`ripple`, four; brown
- * `n_ripple` in mud), a sparkle (`seed_kira`, two), the item ball (`monstarball`), and
- * footprints left in sand (`f_mark_u/d/l/r`) and snow (`nf_mark_*`). Pure Kotlin.
+ * `n_ripple` in mud), a sparkle (`seed_kira`, two), the item ball (`monstarball`), tall grass
+ * shaken up (`kusaeff`, four), and footprints left in sand (`f_mark_u/d/l/r`) and snow
+ * (`nf_mark_*`). Pure Kotlin.
  */
 class FieldEffectArt internal constructor(private val images: Map<String, Image>) {
 
@@ -64,13 +65,13 @@ class FieldEffectArt internal constructor(private val images: Map<String, Image>
     companion object {
         const val ARCHIVE = "a/1/0/3"
 
-        private val WANTED = arrayOf("fuki_", "shibuki", "hero_kemu", "seed_kira", "monstarball", "ripple", "n_ripple", "f_mark_", "nf_mark_")
+        private val WANTED = arrayOf("fuki_", "shibuki", "hero_kemu", "seed_kira", "monstarball", "ripple", "n_ripple", "f_mark_", "nf_mark_", "kusaeff")
 
         /** Where pret/pokeheartgold has them (data/fielddata/fldeff), looked at first; the rest only if some are missing. */
-        private val KNOWN = (2..15).toList() + listOf(18, 20, 26, 27, 29, 30) + (74..77).toList() + (90..93).toList()
+        private val KNOWN = (2..15).toList() + listOf(18, 20, 25, 26, 27, 29, 30) + (74..77).toList() + (90..93).toList()
 
         private val NEEDED = Emote.values().map { "${it.art}.1" } +
-            listOf("shibuki.1", "hero_kemu.1", "seed_kira.1", "monstarball", "ripple.1", "n_ripple.1", "f_mark_u", "nf_mark_u")
+            listOf("shibuki.1", "hero_kemu.1", "seed_kira.1", "monstarball", "ripple.1", "n_ripple.1", "f_mark_u", "nf_mark_u", "kusaeff.1")
 
         /** Reads the effects from the ROM; null when it has none of them. */
         fun load(src: CryArchive.Source): FieldEffectArt? {
@@ -161,6 +162,9 @@ class FieldEffects(private val scene: FieldMap.Scene, val art: FieldEffectArt?, 
             else -> if (snowyFloor) footprint(tile, direction, true, now)
         }
     }
+
+    /** A footprint on [tile] walking [direction], in sand or (when it's snowing) in [snow], whatever the ground. */
+    fun footprintIn(tile: FieldMap.Tile, direction: Int, snow: Boolean, now: Long) = footprint(tile, direction, snow, now)
 
     private fun footprint(tile: FieldMap.Tile, direction: Int, snow: Boolean, now: Long) {
         // a footprint already there is trodden over

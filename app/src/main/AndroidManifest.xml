@@ -22,6 +22,8 @@
     <uses-sdk tools:overrideLibrary="androidx.health.connect.client" />
 
     <uses-feature android:glEsVersion="0x00030000" android:required="true" />
+    <!-- Pokéwalker: the route map can be a live wallpaper (not needed to install) -->
+    <uses-feature android:name="android.software.live_wallpaper" android:required="false" />
 
     <queries>
         <intent>
@@ -224,6 +226,19 @@
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE" />
             </intent-filter>
+        </service>
+
+        <service
+            android:name=".pokewalker.RouteWallpaperService"
+            android:label="@string/pokewalker_wallpaper_label"
+            android:permission="android.permission.BIND_WALLPAPER"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.wallpaper.WallpaperService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.wallpaper"
+                android:resource="@xml/pokewalker_wallpaper" />
         </service>
 
         <activity

@@ -41,8 +41,12 @@ class MapAmbience(private val scene: FieldMap.Scene, private val random: Random 
         val born: Long, val life: Long, val color: Int, val size: Int, val kind: Int, val phase: Float,
     )
 
-    private val w = scene.width.toFloat()
-    private val h = scene.height.toFloat()
+    /** The part of the picture in view now (left, top, right, bottom): things happen there. */
+    var view: FloatArray = scene.view.copyOf()
+    private val x0 get() = view[0]
+    private val y0 get() = view[1]
+    private val w get() = view[2] - view[0]
+    private val h get() = view[3] - view[1]
     private val kind = scene.course.kind
     private val name = scene.course.name.lowercase()
     private val motes = ArrayList<Mote>()
@@ -83,7 +87,7 @@ class MapAmbience(private val scene: FieldMap.Scene, private val random: Random 
         while (it.hasNext()) {
             val m = it.next()
             val age = now - m.born
-            if (age > m.life || m.x < -8 || m.x > w + 8 || m.y < -8 || m.y > h + 8) { it.remove(); continue }
+            if (age > m.life || m.x < x0 - 48 || m.x > x0 + w + 48 || m.y < y0 - 48 || m.y > y0 + h + 48) { it.remove(); continue }
             m.x += m.vx * dt
             m.y += m.vy * dt
             val u = age.toFloat() / m.life
@@ -151,19 +155,19 @@ class MapAmbience(private val scene: FieldMap.Scene, private val random: Random 
 
         if (weather == Weather.MIST) {
             // banks of mist drifting across
-            if (mist.isEmpty()) repeat(5) { mist.add(newMist(random.nextFloat() * (w + 240) - 120)) }
+            if (mist.isEmpty()) repeat(5) { mist.add(newMist(x0 + random.nextFloat() * (w + 240) - 120)) }
             for (c in mist) {
                 c[0] += c[4] * dt
-                if (c[0] - c[2] > w + 20) { val n = newMist(-c[2] - 20 - random.nextFloat() * 80); System.arraycopy(n, 0, c, 0, 5) }
+                if (c[0] - c[2] > x0 + w + 20 || c[0] + c[2] < x0 - 300) { val n = newMist(x0 - c[2] - 20 - random.nextFloat() * 80); System.arraycopy(n, 0, c, 0, 5) }
                 cloudsOut.add(Cloud(c[0], c[1], c[2], c[3], 0.34f, mist = true))
             }
         }
         if (day) {
             // cloud shadows drifting slowly over
-            if (clouds.isEmpty()) repeat(3) { clouds.add(newCloud(random.nextFloat() * (w + 200) - 100)) }
+            if (clouds.isEmpty()) repeat(3) { clouds.add(newCloud(x0 + random.nextFloat() * (w + 200) - 100)) }
             for (c in clouds) {
                 c[0] += c[4] * dt
-                if (c[0] - c[2] > w + 20) { val n = newCloud(-c[2] - 20 - random.nextFloat() * 120); System.arraycopy(n, 0, c, 0, 5) }
+                if (c[0] - c[2] > x0 + w + 20 || c[0] + c[2] < x0 - 300) { val n = newCloud(x0 - c[2] - 20 - random.nextFloat() * 120); System.arraycopy(n, 0, c, 0, 5) }
                 cloudsOut.add(Cloud(c[0], c[1], c[2], c[3], 0.17f))
             }
             birds(now, dots)
@@ -201,7 +205,7 @@ class MapAmbience(private val scene: FieldMap.Scene, private val random: Random 
 
     private fun newMist(x: Float): FloatArray {
         val rx = 110f + random.nextFloat() * 110f
-        return floatArrayOf(x, random.nextFloat() * h, rx, rx * (0.28f + random.nextFloat() * 0.15f), 3f + random.nextFloat() * 4f)
+        return floatArrayOf(x, y0 + random.nextFloat() * h, rx, rx * (0.28f + random.nextFloat() * 0.15f), 3f + random.nextFloat() * 4f)
     }
 
     /** Rain falling and splashing, snow, blowing sand. */
@@ -211,7 +215,7 @@ class MapAmbience(private val scene: FieldMap.Scene, private val random: Random 
             Weather.RAIN -> {
                 // falling streaks, a little slanted, and splashes where they land
                 repeat(4) {
-                    if (chance(30f) && motes.size < 260) motes.add(Mote(random.nextFloat() * (w + 60) - 30, -6f, -40f, 300f + random.nextFloat() * 60f,
+                    if (chance(30f) && motes.size < 260) motes.add(Mote(x0 + random.nextFloat() * (w + 60) - 30, y0 - 6f, -40f, 300f + random.nextFloat() * 60f,
                         now, 900L, 0x88D8E4F4.toInt(), 1, DROP, 0f))
                 }
                 if (chance(26f)) {
@@ -220,13 +224,13 @@ class MapAmbience(private val scene: FieldMap.Scene, private val random: Random 
                         val i = random.nextInt(water.size / 2)
                         motes.add(Mote(water[i * 2], water[i * 2 + 1], 0f, 0f, now, 600L, 0xFFD8ECFF.toInt(), 1, RIPPLE, 0f))
                     } else {
-                        motes.add(Mote(random.nextFloat() * w, random.nextFloat() * h, 0f, 0f, now, 260L, 0xFFE0ECF8.toInt(), 1, SPLASH, 0f))
+                        motes.add(Mote(x0 + random.nextFloat() * w, y0 + random.nextFloat() * h, 0f, 0f, now, 260L, 0xFFE0ECF8.toInt(), 1, SPLASH, 0f))
                     }
                 }
             }
-            Weather.SNOW -> if (kind != FieldMap.Kind.ICE && chance(10f) && motes.size < 200) motes.add(Mote(random.nextFloat() * (w + 40) - 20, -4f,
+            Weather.SNOW -> if (kind != FieldMap.Kind.ICE && chance(10f) && motes.size < 200) motes.add(Mote(x0 + random.nextFloat() * (w + 40) - 20, y0 - 4f,
                 random.nextFloat() * 8 - 4, 12f + random.nextFloat() * 10, now, 30_000L, 0xFFFFFFFF.toInt(), if (random.nextInt(4) == 0) 2 else 1, SNOW, random.nextFloat() * 6f))
-            Weather.SAND -> if (chance(24f) && motes.size < 220) motes.add(Mote(-4f, random.nextFloat() * h, 90f + random.nextFloat() * 60f,
+            Weather.SAND -> if (chance(24f) && motes.size < 220) motes.add(Mote(x0 - 4f, y0 + random.nextFloat() * h, 90f + random.nextFloat() * 60f,
                 random.nextFloat() * 10 - 5, now, 6_000L, if (random.nextBoolean()) 0xC0E8D0A0.toInt() else 0xA0D0B080.toInt(), 1, DUST, 0f))
             else -> {}
         }
@@ -243,7 +247,7 @@ class MapAmbience(private val scene: FieldMap.Scene, private val random: Random 
 
     private fun newCloud(x: Float): FloatArray {
         val rx = 50f + random.nextFloat() * 70f
-        return floatArrayOf(x, random.nextFloat() * h, rx, rx * (0.45f + random.nextFloat() * 0.2f), 5f + random.nextFloat() * 5f)
+        return floatArrayOf(x, y0 + random.nextFloat() * h, rx, rx * (0.45f + random.nextFloat() * 0.2f), 5f + random.nextFloat() * 5f)
     }
 
     /** Now and then a pair of birds' shadows flies across. */
@@ -252,17 +256,17 @@ class MapAmbience(private val scene: FieldMap.Scene, private val random: Random 
         if (birdsAt == Long.MIN_VALUE || now - birdsAt > flight + 18_000 + random.nextInt(20_000)) {
             birdsAt = now
             birdsDir = if (random.nextBoolean()) 1f else -1f
-            birdsFrom = if (birdsDir > 0) -20f else w + 20f
-            birdsY = h * (0.2f + random.nextFloat() * 0.6f)
+            birdsFrom = if (birdsDir > 0) x0 - 20f else x0 + w + 20f
+            birdsY = y0 + h * (0.2f + random.nextFloat() * 0.6f)
         }
         val age = now - birdsAt
         if (age > flight) return
-        val x0 = birdsFrom + birdsDir * (w + 40f) * age / flight
-        val y0 = birdsY - (w + 40f) * 0.25f * age / flight
+        val bx = birdsFrom + birdsDir * (w + 40f) * age / flight
+        val by = birdsY - (w + 40f) * 0.25f * age / flight
         val shade = 0x55000000
         for (b in 0 until 2) {
-            val x = x0 - birdsDir * b * 14f
-            val y = y0 + b * 9f
+            val x = bx - birdsDir * b * 14f
+            val y = by + b * 9f
             val up = ((age / 140) + b) % 2 == 0L
             // a little "v" (wings up) or "-" (wings down)
             dots.add(Dot(x, y, 1, shade))
@@ -286,31 +290,31 @@ class MapAmbience(private val scene: FieldMap.Scene, private val random: Random 
         when {
             !scene.outdoor && kind != FieldMap.Kind.ICE -> {
                 // a cave: dust in the air, drips on the water
-                if (chance(4f)) motes.add(Mote(random.nextFloat() * w, random.nextFloat() * h, random.nextFloat() * 4 - 2,
+                if (chance(4f)) motes.add(Mote(x0 + random.nextFloat() * w, y0 + random.nextFloat() * h, random.nextFloat() * 4 - 2,
                     random.nextFloat() * 3 - 1, now, 3_000L + random.nextInt(3_000), 0xFFD8D0C0.toInt(), 1, DUST, 0f))
                 if (waterTiles > 0 && chance(0.6f)) {
                     val i = random.nextInt(waterTiles)
                     motes.add(Mote(water[i * 2], water[i * 2 + 1], 0f, 0f, now, 900L, 0xFFC8E0FF.toInt(), 1, RIPPLE, 0f))
                 }
             }
-            kind == FieldMap.Kind.ICE -> if (chance(9f)) motes.add(Mote(random.nextFloat() * w, -4f, random.nextFloat() * 6 - 3,
+            kind == FieldMap.Kind.ICE -> if (chance(9f)) motes.add(Mote(x0 + random.nextFloat() * w, y0 - 4f, random.nextFloat() * 6 - 3,
                 10f + random.nextFloat() * 8, now, 30_000L, 0xFFFFFFFF.toInt(), if (random.nextInt(4) == 0) 2 else 1, SNOW, random.nextFloat() * 6f))
-            kind == FieldMap.Kind.VOLCANO -> if (chance(4f)) motes.add(Mote(random.nextFloat() * w, h + 2, random.nextFloat() * 4 - 2,
+            kind == FieldMap.Kind.VOLCANO -> if (chance(4f)) motes.add(Mote(x0 + random.nextFloat() * w, y0 + h + 2, random.nextFloat() * 4 - 2,
                 -12f - random.nextFloat() * 10, now, 6_000L + random.nextInt(3_000),
                 if (random.nextBoolean()) 0xFFFF8A30.toInt() else 0xFFFFC840.toInt(), 1, EMBER, random.nextFloat() * 6f))
             night -> if (kind != FieldMap.Kind.SEA && motes.count { it.kind == FIREFLY } < 16 && chance(3f)) {
-                motes.add(Mote(random.nextFloat() * w, random.nextFloat() * h, random.nextFloat() * 10 - 5, random.nextFloat() * 8 - 4,
+                motes.add(Mote(x0 + random.nextFloat() * w, y0 + random.nextFloat() * h, random.nextFloat() * 10 - 5, random.nextFloat() * 8 - 4,
                     now, 6_000L + random.nextInt(6_000), 0xFFD8FF70.toInt(), 1, FIREFLY, random.nextFloat() * 6f))
             }
             kind == FieldMap.Kind.FOREST || kind == FieldMap.Kind.MOUNTAIN || name.contains("yellow") -> if (chance(3f)) {
                 val colors = if (name.contains("yellow")) intArrayOf(0xFFF0C030.toInt(), 0xFFE08A20.toInt(), 0xFFD8B040.toInt())
                              else intArrayOf(0xFF5AA040.toInt(), 0xFF7CC050.toInt(), 0xFFB0C040.toInt())
-                motes.add(Mote(random.nextFloat() * (w + 60) - 30, -4f, 6f + random.nextFloat() * 6, 9f + random.nextFloat() * 6, now,
+                motes.add(Mote(x0 + random.nextFloat() * (w + 60) - 30, y0 - 4f, 6f + random.nextFloat() * 6, 9f + random.nextFloat() * 6, now,
                     40_000L, colors[random.nextInt(colors.size)], 2, LEAF, random.nextFloat() * 6f))
             }
             day && (kind == FieldMap.Kind.FIELD || kind == FieldMap.Kind.TOWN || kind == FieldMap.Kind.LAKE) -> if (chance(2.5f)) {
                 val colors = intArrayOf(0xFFFFC8D8.toInt(), 0xFFFFFFFF.toInt(), 0xFFFFE070.toInt())
-                motes.add(Mote(-4f, random.nextFloat() * h, 14f + random.nextFloat() * 10, 2f + random.nextFloat() * 4, now,
+                motes.add(Mote(x0 - 4f, y0 + random.nextFloat() * h, 14f + random.nextFloat() * 10, 2f + random.nextFloat() * 4, now,
                     40_000L, colors[random.nextInt(colors.size)], if (random.nextInt(3) == 0) 2 else 1, PETAL, random.nextFloat() * 6f))
             }
         }

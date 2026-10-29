@@ -152,8 +152,17 @@ object FieldPeople {
     /** The game's item ball sprite (SPRITE_MONSTARBALL). */
     const val ITEM_BALL_SPRITE = 87
 
+    /** The game's cracked rock that Rock Smash breaks (SPRITE_BREAKROCK). */
+    const val BREAKROCK_SPRITE = 85
+
     /** Where the maps in [maps] have item balls (x, z), hidden or not. */
-    fun itemBalls(src: CryArchive.Source, maps: Collection<Int>): List<Pair<Int, Int>> {
+    fun itemBalls(src: CryArchive.Source, maps: Collection<Int>): List<Pair<Int, Int>> = objectsWith(src, maps, ITEM_BALL_SPRITE)
+
+    /** Where the maps in [maps] have cracked rocks to smash (x, z). */
+    fun rocks(src: CryArchive.Source, maps: Collection<Int>): List<Pair<Int, Int>> = objectsWith(src, maps, BREAKROCK_SPRITE)
+
+    /** Where the maps in [maps] have objects with [sprite] (x, z). */
+    private fun objectsWith(src: CryArchive.Source, maps: Collection<Int>, sprite: Int): List<Pair<Int, Int>> {
         val narc = Nitro.narc(src, ZONE_EVENTS) ?: return emptyList()
         val out = ArrayList<Pair<Int, Int>>()
         val banks = HashSet<Int>()
@@ -161,7 +170,7 @@ object FieldPeople {
             val bank = eventsBank(map)
             if (bank < 0 || bank >= narc.count || !banks.add(bank)) continue
             val objects = runCatching { readObjects(narc.read(bank)) }.getOrNull() ?: continue
-            for (o in objects) if (o.sprite == ITEM_BALL_SPRITE) out.add(o.x to o.z)
+            for (o in objects) if (o.sprite == sprite) out.add(o.x to o.z)
         }
         return out
     }
@@ -420,10 +429,22 @@ class MapCrowd(val scene: FieldMap.Scene, people: List<FieldPeople.Person>, priv
     fun wildOut(): List<Walker> = walkers.filter { it.wild && !it.leaving }
 
     /**
-     * Brings out a wild Pokémon of [kind] for [life] ms: on a tile near [near] if given, else
-     * anywhere it could be; null when there's nowhere for it.
+     * Brings out a wild Pokémon of [kind] for [life] ms: on [at] if given (and nobody's there),
+     * else on a tile near [near] if given, else anywhere it could be; null when there's nowhere for it.
      */
-    fun spawnWild(kind: WildKind, now: Long, life: Long, near: FieldMap.Tile? = null, onGrassOnly: Boolean = true): Walker? {
+    fun spawnWild(kind: WildKind, now: Long, life: Long, near: FieldMap.Tile? = null, onGrassOnly: Boolean = true, at: FieldMap.Tile? = null): Walker? {
+        if (at != null) {
+            val pk = pokemon
+            if (occupied(at.gx, at.gy) || (pk != null && pk.gx == at.gx && pk.gy == at.gy) ||
+                pokemonNext?.let { it.gx == at.gx && it.gy == at.gy } == true) return null
+            val w = Walker(FieldPeople.Person(kind.model, at, 3, random.nextInt(4), 3, 3, false, kind.swims, wild = true, species = kind.species))
+            w.bornAt = now
+            w.leaveAt = now + life
+            w.waitUntil = now + APPEAR_MS + 300 + random.nextInt(900)
+            walkers.add(w)
+            popped.add(at to true)
+            return w
+        }
         val land = scene.tiles.values
         val pool: Collection<FieldMap.Tile> = when {
             kind.swims -> scene.water.values
@@ -521,7 +542,10 @@ class MapCrowd(val scene: FieldMap.Scene, people: List<FieldPeople.Person>, priv
             when (w.kind) {
                 Kind.STILL -> w.waitUntil = now + 2_000
                 Kind.LOOK -> {
-                    w.facing = otherDirection(w)
+                    // the Pokémon close by catches their eye
+                    val near = pokemon != null && !w.wild && abs(pokemon.gx - w.at.gx) + abs(pokemon.gy - w.at.gy) in 1..3
+                    val look = if (near && random.nextInt(10) < 6) toward(w.at, pokemon!!.gx, pokemon.gy) else -1
+                    w.facing = if (look >= 0 && look in w.directions) look else otherDirection(w)
                     w.waitUntil = now + 1_000 + random.nextInt(2_200)
                 }
                 Kind.WANDER -> {

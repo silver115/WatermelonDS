@@ -1,6 +1,7 @@
 package me.magnum.melonds.pokewalker
 
 import kotlin.math.abs
+import kotlin.math.atan
 import kotlin.math.cos
 import kotlin.math.floor
 import kotlin.math.max
@@ -381,6 +382,15 @@ object FieldMap {
         val tallGrass get() = isGrass(behavior)
     }
 
+    /** The tile behaviour of a tree that can be headbutted (TILE_BEHAVIOR_HEADBUTT). */
+    const val HEADBUTT = 0x06
+
+    /**
+     * A tree to headbutt: its [tile], the ground in [front] of it the Pokémon stands on to do it,
+     * and the box (picture pixels) its trunk and leaves are drawn in, to shake.
+     */
+    class Tree(val tile: Tile, val front: Tile, val left: Int, val top: Int, val right: Int, val bottom: Int)
+
     /** The drawn area and what the walking Pokémon needs to move around it. */
     class Scene(
         val course: Course,
@@ -424,8 +434,24 @@ object FieldMap {
         val glows: FloatArray = FloatArray(0),
         /** Where the maps have item balls, on ground in sight. */
         val itemSpots: List<Tile> = emptyList(),
+        /**
+         * The part of the picture shown when the view isn't following the Pokémon about (left,
+         * top, right, bottom in picture pixels): the middle of it, where the place was picked to
+         * look its best. The picture around it is the rest of the route, to pan across.
+         */
+        val view: FloatArray = floatArrayOf(0f, 0f, width.toFloat(), height.toFloat()),
+        /** Trees in sight that can be headbutted. */
+        val trees: List<Tree> = emptyList(),
+        /** Ground hidden behind something in front of it (a roof, a tree), next to ground in sight: places to hide. */
+        val hiding: List<Tile> = emptyList(),
+        /** The maps' cracked rocks on ground in sight, to smash. */
+        val rocks: List<Tile> = emptyList(),
     ) {
         fun tile(gx: Int, gy: Int): Tile? = tiles[key(gx, gy)]
+
+        /** Whether picture point ([px], [py]) is in the [view], [margin] pixels in from its edges. */
+        fun inView(px: Float, py: Float, margin: Float = 0f): Boolean =
+            px >= view[0] + margin && px <= view[2] - margin && py >= view[1] + margin && py <= view[3] - margin
 
         /** Picture position (x, y) and 1/w of a world point. */
         fun project(x: Double, y: Double, z: Double): FloatArray? {
@@ -467,10 +493,17 @@ object FieldMap {
     /**
      * Draws the place in the game that looks like [course] into a [width] x [height] picture at
      * the DS's own scale (one pixel a unit where the camera looks, so about 16 pixels a tile),
-     * lit for [minute] of the day. [log] gets a line about what was chosen.
+     * lit for [minute] of the day. The spot is picked for a [viewWidth] x [viewHeight] view in
+     * the middle of the picture (seen through the game's own camera); the rest of the picture is
+     * more of the route around it, to pan across. [log] gets a line about what was chosen.
      */
-    fun render(src: CryArchive.Source, course: Course, width: Int, height: Int, minute: Int, log: (String) -> Unit = {}): Scene {
+    fun render(
+        src: CryArchive.Source, course: Course, width: Int, height: Int, minute: Int,
+        viewWidth: Int = width, viewHeight: Int = height, log: (String) -> Unit = {},
+    ): Scene {
         if (width < 32 || height < 32 || width > 2048 || height > 2048) throw MapException("picture size ${width}x$height")
+        val vw = viewWidth.coerceIn(32, width)
+        val vh = viewHeight.coerceIn(32, height)
         val matrices = Nitro.narc(src, MATRICES) ?: throw MapException("no map matrices in the ROM", wholeRom = true)
         val lands = Nitro.narc(src, LAND_DATA) ?: throw MapException("no map blocks in the ROM", wholeRom = true)
         val areas = Nitro.narc(src, AREA_DATA) ?: throw MapException("no area data in the ROM", wholeRom = true)
@@ -535,9 +568,9 @@ object FieldMap {
         // the people the map always has, to have some of them in view
         val ownPeople = runCatching { FieldPeople.spots(src, listOf(course.map), log) }.getOrDefault(emptyList())
 
-        // the window that shows the course best: what the picture shows, in tiles, kept inside one block
-        val across = (width / TILE).roundToInt().coerceIn(6, 30)
-        val down = (height / TILE * 1.25).roundToInt().coerceIn(6, 30)
+        // the window that shows the course best: what the view shows, in tiles, kept inside one block
+        val across = (vw / TILE).roundToInt().coerceIn(6, 30)
+        val down = (vh / TILE * 1.25).roundToInt().coerceIn(6, 30)
         val halfX = across / 2
         val halfY = down / 2
         var best = Double.NEGATIVE_INFINITY
@@ -591,11 +624,13 @@ object FieldMap {
         }
         log("Map for ${course.name}: ${course.place} (map ${course.map}), tiles around $bestGx,$bestGy")
 
-        // the camera: the field camera's angle and lens at the DS's scale
+        // the camera: the field camera's angle and lens at the DS's scale for the view, its lens
+        // opened wider to take in the rest of the picture around it (the view looks the same)
         val aspect = width.toDouble() / height
         val tx = bestGx * TILE
         val tz = bestGy * TILE
-        val dist = height / 2.0 / tan(FOVY / 2)
+        val dist = vh / 2.0 / tan(FOVY / 2)
+        val fovy = 2 * atan(height / 2.0 / dist)
 
         // the blocks it can see: the ground the view covers, and room for tall things just outside
         val bx0 = floor((tx - width * 0.6 - 64) / BLOCK).toInt()
@@ -775,7 +810,7 @@ object FieldMap {
         val cy = centerY ?: 0.0
 
         val eye = doubleArrayOf(tx, cy + dist * sin(PITCH), tz + dist * cos(PITCH))
-        val viewProj = Mat4.mul(SoftRenderer.perspective(FOVY, aspect, dist * 0.4, dist * 2.5), SoftRenderer.lookAt(eye, doubleArrayOf(tx, cy, tz)))
+        val viewProj = Mat4.mul(SoftRenderer.perspective(fovy, aspect, dist * 0.4, dist * 2.5), SoftRenderer.lookAt(eye, doubleArrayOf(tx, cy, tz)))
         val r = SoftRenderer(width, height)
         r.clear(0xFF000000.toInt())
         r.viewProj = viewProj
@@ -807,6 +842,8 @@ object FieldMap {
 
         // tiles the Pokémon can walk on and that are in sight, with room for it to be drawn
         val tiles = HashMap<Long, Tile>()
+        // ground with something in front of it (places to hide)
+        val behind = ArrayList<Tile>()
         for (by in by0..by1) for (bx in bx0..bx1) {
             if (landAt(bx, by) == null) continue
             for (y in 0 until 32) for (x in 0 until 32) {
@@ -818,11 +855,22 @@ object FieldMap {
                 val wz = gy * TILE + TILE / 2
                 val pr = r.project(wx, gh, wz) ?: continue
                 if (pr[0] < 10f || pr[0] > width - 10f || pr[1] < 30f || pr[1] > height - 4f) continue
+                val l = landAt(bx, by)!!
                 // something drawn in front of the ground here (a roof, a tree top): not in sight
                 val d = r.depth[pr[1].toInt().coerceIn(0, height - 1) * width + pr[0].toInt().coerceIn(0, width - 1)]
-                if (d > pr[2] * 1.004f) continue
-                val l = landAt(bx, by)!!
+                if (d > pr[2] * 1.004f) {
+                    // well hidden: its middle and a little above it (where someone standing there would be)
+                    val up = r.project(wx, gh + 12.0, wz)
+                    val hid = up == null || up[1] < 0f || r.depth[up[1].toInt().coerceIn(0, height - 1) * width + up[0].toInt().coerceIn(0, width - 1)] > up[2] * 1.004f
+                    if (hid) behind.add(Tile(gx, gy, wx, gh, wz, l.behavior(x, y)))
+                    continue
+                }
                 tiles[Scene.key(gx, gy)] = Tile(gx, gy, wx, gh, wz, l.behavior(x, y))
+            }
+        }
+        val hiding = behind.filter { t ->
+            listOf(t.gx to t.gy + 1, t.gx - 1 to t.gy, t.gx + 1 to t.gy, t.gx to t.gy - 1).any { (x, y) ->
+                tiles[Scene.key(x, y)]?.let { stepOk(it, t) } == true
             }
         }
         // the water in sight
@@ -931,10 +979,45 @@ object FieldMap {
         // where the maps keep item balls (whether or not they've been picked up in the game)
         val itemSpots = runCatching { FieldPeople.itemBalls(src, mapsInSight) }.getOrDefault(emptyList())
             .mapNotNull { (x, z) -> tiles[Scene.key(x, z)] }.distinctBy { Scene.key(it.gx, it.gy) }
-        log("${ledges.size} ledge tiles, ${signs.size} things to read, ${doors.size} doors, ${glows.size / 4} lights ($litNames), ${itemSpots.size} item ball spots")
+        // cracked rocks to smash, where they stand on ground in sight
+        val rocks = runCatching { FieldPeople.rocks(src, mapsInSight) }.getOrDefault(emptyList())
+            .mapNotNull { (x, z) -> tiles[Scene.key(x, z)] }.distinctBy { Scene.key(it.gx, it.gy) }
+        // trees to headbutt: the game's tree tiles (all of its trees have them) at the edge of
+        // ground in sight, a tree every other tile, the one right behind the ground first
+        val treeTiles = HashSet<Long>()
+        for (by in by0..by1) for (bx in bx0..bx1) {
+            val l = landAt(bx, by) ?: continue
+            for (y in 0 until 32) for (x in 0 until 32) if (l.behavior(x, y) == HEADBUTT) treeTiles.add(Scene.key(bx * 32 + x, by * 32 + y))
+        }
+        val trees = ArrayList<Tree>()
+        val treeTaken = HashSet<Long>()
+        val byRow = tiles.values.sortedWith(compareBy<Tile>({ it.gy }, { it.gx }))
+        // trees with the ground right in front of them (below) first, then the ones beside a path
+        for (pass in 0..1) for (t in byRow) {
+            for ((dx, dy) in if (pass == 0) listOf(0 to -1) else listOf(-1 to 0, 1 to 0)) {
+                val gx = t.gx + dx
+                val gy = t.gy + dy
+                val k = Scene.key(gx, gy)
+                if (k !in treeTiles || k in treeTaken || Scene.key(gx - 1, gy) in treeTaken || Scene.key(gx + 1, gy) in treeTaken) continue
+                // beside a path, one every other tile up it too
+                if (pass == 1 && (Scene.key(gx, gy - 1) in treeTaken || Scene.key(gx, gy + 1) in treeTaken)) continue
+                // the trunk stands where the tree's tile meets the ground in front of it
+                val base = r.project(gx * TILE + TILE / 2, t.y, gy * TILE + if (dy == -1) TILE else TILE * 0.75) ?: continue
+                if (base[0] < 8f || base[0] > width - 8f || base[1] < 24f || base[1] > height) continue
+                val bx = base[0].roundToInt()
+                val by = base[1].roundToInt()
+                treeTaken.add(k)
+                trees.add(Tree(Tile(gx, gy, gx * TILE + TILE / 2, t.y, gy * TILE + TILE / 2, HEADBUTT), t,
+                    (bx - 16).coerceAtLeast(0), (by - 46).coerceAtLeast(0), (bx + 16).coerceAtMost(width - 1), (by + 1).coerceAtMost(height - 1)))
+                break
+            }
+        }
+        val view = floatArrayOf((width - vw) / 2f, (height - vh) / 2f, (width + vw) / 2f, (height + vh) / 2f)
+        log("${ledges.size} ledge tiles, ${signs.size} things to read, ${doors.size} doors, ${glows.size / 4} lights ($litNames), " +
+            "${itemSpots.size} item ball spots, ${trees.size} trees to headbutt, ${rocks.size} rocks, ${hiding.size} places to hide")
         return Scene(course, width, height, r.color, r.depth, viewProj, tiles, TILE.toFloat(), start, lightKey(minute, lightType),
             animation, water.toFloatArray(), followsTheDay(lightType), waterTiles, people, ledges, signs, props, doors,
-            timeOfDay, glows.toFloatArray(), itemSpots)
+            timeOfDay, glows.toFloatArray(), itemSpots, view, trees, hiding, rocks)
     }
 
     const val WINDOW = 1

@@ -34,10 +34,10 @@ import kotlin.system.exitProcess
  * effects, and life on the map (item balls, a tossed berry, birds and Magikarp, sleep, moods,
  * sparkles, emote bubbles). Usage: MapTest <fake.nds> <fake_without_maps.nds>
  */
-private var checks = 0
-private var failures = 0
+internal var checks = 0
+internal var failures = 0
 
-private fun check(ok: Boolean, what: String) {
+internal fun check(ok: Boolean, what: String) {
     checks++
     if (!ok) {
         failures++
@@ -45,7 +45,7 @@ private fun check(ok: Boolean, what: String) {
     }
 }
 
-private fun source(path: String): CryArchive.Source {
+internal fun source(path: String): CryArchive.Source {
     val f = RandomAccessFile(path, "r")
     return object : CryArchive.Source {
         override val size = f.length()
@@ -681,7 +681,8 @@ fun main(args: Array<String>) {
         check(patch != null, "a spot for the berry patch")
         games.berryTile = patch
         games.berryStore = store
-        check(games.available() == MapGames.Game.values().toList(), "all five games here (${games.available()})")
+        check(games.available().containsAll(listOf(MapGames.Game.FISHING, MapGames.Game.TAG, MapGames.Game.CONTEST, MapGames.Game.UNOWN, MapGames.Game.BERRY)),
+            "all five games here (${games.available()})")
         var tg = 1_000_000L
         fun run(ms: Long, each: () -> Unit = {}) {
             val until = tg + ms
@@ -782,6 +783,7 @@ fun main(args: Array<String>) {
 
     buildingsThatMove(src, scene, w, h)
     effectsAndLife(src, scene)
+    playAndCharm(src, scene, w, h)
 
     // ---- the cave course: only the real cave floor ----
     val cave = FieldMap.render(src, FieldMap.COURSES[5], w, h, 900)
@@ -1041,7 +1043,7 @@ private fun effectsAndLife(src: CryArchive.Source, scene: FieldMap.Scene) {
         var te = 0L
         val seen = HashSet<MapWanderer.Happening>()
         while (te < 900_000) { explorer.update(te); seen.addAll(explorer.happenings); explorer.happenings.clear(); te += 100 }
-        check(seen == MapWanderer.Happening.values().toSet(), "it sniffs, reads and lands from jumps ($seen)")
+        check(seen.containsAll(setOf(MapWanderer.Happening.SNIFF, MapWanderer.Happening.READ, MapWanderer.Happening.LANDED)), "it sniffs, reads and lands from jumps ($seen)")
         val left = MapWanderer(scene, Random(42))
         var tl = 0L
         while (tl < 900_000) { left.update(tl); tl += 100 }
@@ -1169,7 +1171,7 @@ private fun effectsAndLife(src: CryArchive.Source, scene: FieldMap.Scene) {
         check(l.toss(water, 192f, 224f, now) && l.treat?.tile?.let { scene.tile(it.gx, it.gy) != null } == true, "thrown at the water, it lands on the shore")
         run(15_000, noon)
         check(l.treat == null, "and is eaten too")
-        val from = pk.at
+        val from = pk.next ?: pk.at
         check(l.tossNear(192f, 224f, now) && l.treat!!.tile.let { abs(it.gx - from.gx) + abs(it.gy - from.gy) in 2..4 }, "tossed from the menu: a few steps away")
     }
     life(54, games = true) {
@@ -1289,7 +1291,7 @@ private fun effectsAndLife(src: CryArchive.Source, scene: FieldMap.Scene) {
         check(spotted, "a trainer spots it in front of him: \"!\"")
         var again = 0
         val from = now
-        run(10_000, noon) { t -> if (t > from + 2_000 && l.emotes.at(man, t) != null) again++ }
+        run(10_000, noon) { t -> if (t > from + 2_000 && l.emotes.at(man, t)?.emote == Emote.EXCLAIM) again++ }
         check(again == 0, "just the once")
         pk.held = false
         pk.placeAt(scene.tile(39, 20)!!)

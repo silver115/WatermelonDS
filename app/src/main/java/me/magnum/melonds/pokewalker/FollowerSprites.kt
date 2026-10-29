@@ -84,6 +84,26 @@ object FollowerSprites {
         return fromPersonTexSet(set) ?: if (model >= FIRST) fromTexSet(set, false) else null
     }
 
+    /**
+     * A thing that stands still on the map by its mmodel number (a cracked rock, a boulder): its
+     * one picture, set in a square with its bottom at the bottom; null when there's none.
+     */
+    fun loadStill(src: CryArchive.Source, model: Int): Sprite? {
+        val narc = Nitro.narc(src, MMODEL) ?: return null
+        if (model < 0 || model >= narc.count) return null
+        val set = Nitro.parse(narc.read(model)).texSet ?: return null
+        val t = set.textures.values.firstOrNull() ?: return null
+        val pal = set.palettes.values.firstOrNull() ?: return null
+        val px = Nitro.decode(t, pal) ?: return null
+        val size = maxOf(t.width, t.height)
+        if (size > 64) return null
+        val out = IntArray(size * size)
+        val left = (size - t.width) / 2
+        val top = size - t.height
+        for (y in 0 until t.height) for (x in 0 until t.width) out[(top + y) * size + left + x] = px[y * t.width + x]
+        return Sprite(arrayOf(out), size, 1)
+    }
+
     /** A person's sixteen frames, by the number after the dot (gswoman1.1 ... .16), with palette 0. */
     fun fromPersonTexSet(set: Nitro.TexSet): Sprite? {
         if (set.textures.size < 16) return null

@@ -105,7 +105,7 @@ object CryArchive {
 
     // ---- the sound archive --------------------------------------------------------------------
 
-    private class Sdat(private val src: Source, private val base: Long, length: Long) {
+    internal class Sdat(private val src: Source, private val base: Long, length: Long) {
         private val info: ByteArray
         private val fat: ByteArray
 
@@ -124,6 +124,7 @@ object CryArchive {
         }
 
         fun u16(infoPos: Int) = CryArchive.u16(info, infoPos)
+        fun u8(infoPos: Int) = info[infoPos].toInt() and 0xFF
 
         /** Offset in the INFO block of entry [index] of [group] ([size] bytes), or null if there is none. */
         fun entry(group: Int, index: Int, size: Int): Int? {
