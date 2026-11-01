@@ -171,6 +171,7 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
     private val revealOn get() = prefs.getBoolean(RouteMaps.KEY_REVEAL, true)
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        CrashLog.install(this)
         super.onCreate(savedInstanceState)
         title = getString(R.string.pokewalker_device_label)
         // Opening this screen may be what started the app: make sure the walker is open.
@@ -330,7 +331,7 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
         }
         stage.addView(white, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         flash = white
-        stage.setOnTouchListener { v, e -> exploreTouch(v, e) }
+        stage.setOnTouchListener { v, e -> guard(true) { exploreTouch(v, e) } }
         column.addView(stage, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         root.addView(
             column,
@@ -343,6 +344,10 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
         rootLayout = root
         setContentView(root)
         if (exploring) showExploring()
+        // a map that goes wrong while it's drawn is switched off: so is what goes with it
+        scene.onMapBroken = { mapDropped() }
+        // what went wrong last time, to read and send
+        CrashLog.take(this)?.let { showProblem(it) }
         updateGamesButton()
         ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
@@ -551,15 +556,17 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
             sceneDrawnAt = now
             scene.invalidateSelf()
         }
-        scene.map?.let { map ->
-            // what's caught cries out; what a game has to say goes in the caption
-            for (species in map.takeCries()) PokemonCries.play(this, species, lastVolume) {}
-            // a catch or a find from the walker's own Poké Radar or dowsing: onto the walker
-            for (r in map.takeRewards()) keep(r)
-            if (now - captionAt >= 250) {
-                captionAt = now
-                if (exploring) updateCaption()
-                updateSteering(map, now)
+        guard(Unit) {
+            scene.map?.let { map ->
+                // what's caught cries out; what a game has to say goes in the caption
+                for (species in map.takeCries()) PokemonCries.play(this, species, lastVolume) {}
+                // a catch or a find from the walker's own Poké Radar or dowsing: onto the walker
+                for (r in map.takeRewards()) keep(r)
+                if (now - captionAt >= 250) {
+                    captionAt = now
+                    if (exploring) updateCaption()
+                    updateSteering(map, now)
+                }
             }
         }
         val flags = PokewalkerNative.deviceFrame(frame)
@@ -643,12 +650,14 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
         }
         val b = scene.bounds
         scene.map = if (!walking) null else RouteMaps.get(this, status!!.route, status.routeImage, walkParty, b.width(), b.height())
-        scene.map?.let { map ->
-            if (status != null) {
-                map.setSteps(status.totalSteps, status.todaySteps, Pokewalker.stepGoal(this), SystemClock.uptimeMillis())
-                map.reveal = if (revealOn) RouteMaps.revealed(this, status.strollStartUnix, status.totalSteps, status.todaySteps) else 1f
+        guard(Unit) {
+            scene.map?.let { map ->
+                if (status != null) {
+                    map.setSteps(status.totalSteps, status.todaySteps, Pokewalker.stepGoal(this), SystemClock.uptimeMillis())
+                    map.reveal = if (revealOn) RouteMaps.revealed(this, status.strollStartUnix, status.totalSteps, status.todaySteps) else 1f
+                }
+                map.following = exploring && followOn
             }
-            map.following = exploring && followOn
         }
         exploreButton?.visibility = if (scene.map != null) View.VISIBLE else View.GONE
         updateGamesButton()
@@ -775,7 +784,7 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
         for ((i, g) in games.withIndex()) menu.menu.add(0, i, i, getString(gameName(g)))
         if (map.hasPokemon && map.gameOn == null) menu.menu.add(0, MENU_TOSS, 99, getString(R.string.pokewalker_toss_berry))
         if (map.gameOn != null) menu.menu.add(0, MENU_STOP, 100, getString(R.string.pokewalker_game_stop))
-        menu.setOnMenuItemClickListener { item ->
+        menu.setOnMenuItemClickListener { item -> guard(true) {
             val now = SystemClock.uptimeMillis()
             when (item.itemId) {
                 MENU_STOP -> map.stopGame(now)
@@ -789,7 +798,7 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
             }
             updateCaption()
             true
-        }
+        } }
         menu.show()
     }
 
@@ -968,7 +977,7 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
         menu.menu.add(0, MENU_ZOOM, 3, if (map.zoomTarget > 1.2f) R.string.pokewalker_option_zoom_out else R.string.pokewalker_option_zoom_in)
         menu.menu.add(0, MENU_PHOTO, 4, R.string.pokewalker_photo)
         menu.menu.add(0, MENU_WALLPAPER, 5, R.string.pokewalker_option_wallpaper)
-        menu.setOnMenuItemClickListener { item ->
+        menu.setOnMenuItemClickListener { item -> guard(true) {
             when (item.itemId) {
                 MENU_MUSIC -> {
                     prefs.edit().putBoolean(RouteMaps.KEY_MUSIC, !musicOn).apply()
@@ -990,7 +999,7 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
                 MENU_WALLPAPER -> useAsWallpaper()
             }
             true
-        }
+        } }
         menu.show()
     }
 
@@ -1240,7 +1249,9 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
     }
 
     /** The stick and the D-pad's hat walk the Pokémon about too (on a Thor, or while exploring). */
-    override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+    override fun onGenericMotionEvent(event: MotionEvent): Boolean = guard(true) { motion(event) }
+
+    private fun motion(event: MotionEvent): Boolean {
         val map = scene.map
         if (map != null && map.hasPokemon && (padSteers || exploring) && event.actionMasked == MotionEvent.ACTION_MOVE &&
             (event.isFromSource(InputDevice.SOURCE_JOYSTICK) || event.isFromSource(InputDevice.SOURCE_GAMEPAD))) {
@@ -1289,6 +1300,60 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
         }
     }
 
+    // ---- when something goes wrong -------------------------------------------------------------
+
+    /**
+     * Runs [block]; when the route map is there and something in it goes wrong, the map is
+     * switched off (the painted landscape shows, the walker carries on) instead of the app closing.
+     */
+    private inline fun <T> guard(fallback: T, block: () -> T): T {
+        return try {
+            block()
+        } catch (e: Throwable) {
+            val map = scene.map ?: throw e
+            scene.map = null
+            RouteMaps.broken(map, e)
+            mapDropped()
+            fallback
+        }
+    }
+
+    /** The route map was switched off after a problem: no exploring, no music; say so once. */
+    private fun mapDropped() {
+        if (exploring) setExploring(false)
+        exploreButton?.visibility = View.GONE
+        steeringChip?.visibility = View.GONE
+        updateGamesButton()
+        RouteMusicOut.stop()
+        Toast.makeText(this, R.string.pokewalker_map_problem, Toast.LENGTH_LONG).show()
+    }
+
+    /** What went wrong last time (a crash, or the map switched off), to copy or send. */
+    private fun showProblem(text: String) {
+        val view = TextView(this).apply {
+            this.text = text
+            setTextIsSelectable(true)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            typeface = Typeface.MONOSPACE
+            setPadding(dp(20), dp(12), dp(20), dp(12))
+        }
+        val scroll = android.widget.ScrollView(this).apply { addView(view) }
+        android.app.AlertDialog.Builder(this)
+            .setTitle(R.string.pokewalker_problem_title)
+            .setView(scroll)
+            .setPositiveButton(R.string.pokewalker_problem_copy) { _, _ ->
+                val clip = getSystemService(android.content.ClipboardManager::class.java)
+                clip?.setPrimaryClip(android.content.ClipData.newPlainText("Pokéwalker problem report", text))
+                Toast.makeText(this, R.string.pokewalker_problem_copied, Toast.LENGTH_SHORT).show()
+            }
+            .setNeutralButton(R.string.pokewalker_problem_share) { _, _ ->
+                val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
+                runCatching { startActivity(Intent.createChooser(send, getString(R.string.pokewalker_problem_title))) }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
     // ---- keys ---------------------------------------------------------------------------------
 
     /**
@@ -1305,7 +1370,11 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
         else -> -1
     }
 
-    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean = guard(true) { keyDown(keyCode, event) }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean = guard(true) { keyUp(keyCode, event) }
+
+    private fun keyDown(keyCode: Int, event: KeyEvent): Boolean {
         // while exploring the walker is put away: its buttons do nothing
         if (exploring) return exploreKey(keyCode, event, true) || buttonForKey(keyCode) >= 0 || super.onKeyDown(keyCode, event)
         if (padSteers && steerKey(keyCode, event, true)) return true
@@ -1318,7 +1387,7 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
         return true
     }
 
-    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+    private fun keyUp(keyCode: Int, event: KeyEvent): Boolean {
         if (exploring) return exploreKey(keyCode, event, false) || buttonForKey(keyCode) >= 0 || super.onKeyUp(keyCode, event)
         if (padSteers && steerKey(keyCode, event, false)) return true
         val button = buttonForKey(keyCode)

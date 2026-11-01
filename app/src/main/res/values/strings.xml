@@ -776,6 +776,11 @@
     <string name="pokewalker_explore_hint_pad">D-pad: walk %1$s about · A: whatever it\'s facing · B: back to the walker. It roams again when you let go.</string>
     <string name="pokewalker_steering">You\'re walking %1$s</string>
     <string name="pokewalker_roaming">%1$s is roaming again</string>
+    <string name="pokewalker_map_problem">The route map hit a problem and was switched off. The walker carries on; open this screen again to see what went wrong.</string>
+    <string name="pokewalker_problem_title">Something went wrong last time</string>
+    <string name="pokewalker_problem_copy">Copy</string>
+    <string name="pokewalker_problem_copied">Copied</string>
+    <string name="pokewalker_problem_share">Share</string>
     <string name="pokewalker_pad_intro">AYN Thor: the D-pad walks %1$s about the route. L1, R1 and A press the walker\'s buttons.</string>
     <string name="pokewalker_map_options">Map options</string>
     <string name="pokewalker_option_music">Route music</string>

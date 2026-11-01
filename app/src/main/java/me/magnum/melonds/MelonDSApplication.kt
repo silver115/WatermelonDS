@@ -34,6 +34,8 @@ class MelonDSApplication : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
+        // crashes are written down, to be shown (and sent) from the Pokéwalker screen
+        me.magnum.melonds.pokewalker.CrashLog.install(this)
         createNotificationChannels()
         applyTheme()
         performMigrations()

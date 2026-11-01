@@ -54,6 +54,7 @@ object RouteMusicOut {
 
     private fun run(context: Context) {
         var track: AudioTrack? = null
+        var failed = false
         try {
             while (true) {
                 val seq = wanted
@@ -79,18 +80,23 @@ object RouteMusicOut {
                 if (fadeOut || !player.playing) return
             }
         } catch (e: CryArchive.FormatException) {
+            failed = true
             Log.w(TAG, "No route music: ${e.message}")
-        } catch (e: Exception) {
-            Log.w(TAG, "Route music stopped", e)
+        } catch (e: Throwable) {
+            // a song the player can't handle: no music this time (never the app closing)
+            failed = true
+            Pokewalker.lastGameUri(context)?.let { failedRom = it }
+            CrashLog.record("Route music stopped", e)
         } finally {
             track?.let {
                 runCatching { it.pause(); it.flush(); it.stop() }
-                it.release()
+                runCatching { it.release() }
             }
             synchronized(this) {
                 if (thread === Thread.currentThread()) thread = null
+                if (failed) wanted = -1
                 // asked to play again while it was fading out: start over
-                if (!fadeOut && wanted >= 0 && thread == null) {
+                if (!failed && !fadeOut && wanted >= 0 && thread == null) {
                     thread = Thread({ run(context) }, "RouteMusic").apply { isDaemon = true; start() }
                 }
             }

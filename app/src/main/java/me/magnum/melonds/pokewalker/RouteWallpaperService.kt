@@ -144,7 +144,7 @@ class RouteWallpaperService : WallpaperService() {
             try {
                 canvas = if (Build.VERSION.SDK_INT >= 26) holder.lockHardwareCanvas() else holder.lockCanvas()
                 if (canvas != null) scene.draw(canvas)
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 Log.w("RouteWallpaper", "Could not draw", e)
             } finally {
                 if (canvas != null) runCatching { holder.unlockCanvasAndPost(canvas) }

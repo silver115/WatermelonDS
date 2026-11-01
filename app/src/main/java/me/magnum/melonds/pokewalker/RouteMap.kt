@@ -549,7 +549,7 @@ class RouteMap internal constructor(
                         synchronized(propsFrame) { System.arraycopy(pr.overlay, 0, propsFrame, 0, propsFrame.size) }
                         propsReady = true
                     }
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
                     Log.w("RouteMap", "Animation stopped", e)
                 } finally {
                     animBusy.set(false)
@@ -1698,7 +1698,22 @@ object RouteMaps {
             fail(key, Long.MAX_VALUE)
             Log.w(TAG, "Not enough memory for the route map", e)
             null
+        } catch (e: Throwable) {
+            // anything else (a bug): no map this session, rather than the app closing
+            fail(key, Long.MAX_VALUE)
+            CrashLog.record("Route map couldn't be made for ${course.place}", e)
+            null
         }
+    }
+
+    /**
+     * [map] went wrong while it was being drawn or played with: it's let go, and not made again
+     * for this walk until the app is opened again (the painted landscape shows instead).
+     */
+    fun broken(map: RouteMap, e: Throwable) {
+        fail(map.key, Long.MAX_VALUE)
+        synchronized(cached) { cached.entries.removeAll { it.value === map } }
+        CrashLog.record("Route map stopped (${map.scene.course.place})", e)
     }
 
     private fun artFor(uri: String, src: CryArchive.Source): FieldEffectArt? {

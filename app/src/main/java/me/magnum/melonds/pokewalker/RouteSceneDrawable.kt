@@ -102,6 +102,9 @@ class RouteSceneDrawable(private val density: Float) : Drawable() {
             invalidateSelf()
         }
 
+    /** Told (on the main thread, after the drawing) when the map went wrong and was switched off. */
+    var onMapBroken: (() -> Unit)? = null
+
     /** Just the place, not dimmed for cards on top (they're put away). */
     var explore = false
         set(value) { field = value; invalidateSelf() }
@@ -125,10 +128,21 @@ class RouteSceneDrawable(private val density: Float) : Drawable() {
         canvas.save()
         canvas.translate(b.left.toFloat(), b.top.toFloat())
         canvas.clipRect(0f, 0f, w, h)
-        val place = map
+        var place = map
         if (place != null) {
-            place.draw(canvas, w, h, ms)
-        } else {
+            val saved = canvas.save()
+            try {
+                place.draw(canvas, w, h, ms)
+            } catch (e: Throwable) {
+                // a bug in the map shouldn't close the app: back to the painted landscape
+                map = null
+                RouteMaps.broken(place, e)
+                place = null
+                onMapBroken?.let { tell -> android.os.Handler(android.os.Looper.getMainLooper()).post { tell() } }
+            }
+            canvas.restoreToCount(saved)
+        }
+        if (place == null) {
             sceneCanvas.canvas = canvas
             scene.paint(sceneCanvas, w, h, minute, ms)
             sceneCanvas.canvas = null
