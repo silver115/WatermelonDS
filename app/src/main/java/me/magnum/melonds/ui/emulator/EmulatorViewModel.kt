@@ -38,6 +38,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.magnum.melonds.MelonEmulator
+import me.magnum.melonds.domain.model.Input
 import me.magnum.melonds.common.romprocessors.RomFileProcessorFactory
 import me.magnum.melonds.common.runtime.ScreenshotFrameBufferProvider
 import me.magnum.melonds.domain.model.Cheat
@@ -352,10 +353,13 @@ class EmulatorViewModel @Inject constructor(
         sessionCoroutineScope.launch {
             emulatorManager.pauseEmulator()
             if (showPauseMenu) {
-                val pauseOptions = when (_emulatorState.value) {
+                val pauseOptions = when (val state = _emulatorState.value) {
                     is EmulatorState.RunningRom -> {
+                        // HeartGold/SoulSilver (game codes IPK… / IPG…) get the Pokéwalker's "send home"
+                        val heartGoldSoulSilver = runCatching { getRomInfo(state.rom)?.gameCode }.getOrNull()
+                            ?.let { it.startsWith("IPK") || it.startsWith("IPG") } == true
                         RomPauseMenuOption.entries.filter {
-                            filterRomPauseMenuOption(it)
+                            filterRomPauseMenuOption(it) && (it != RomPauseMenuOption.POKEWALKER_SEND_HOME || heartGoldSoulSilver)
                         }
                     }
                     is EmulatorState.RunningFirmware -> {
@@ -374,6 +378,22 @@ class EmulatorViewModel @Inject constructor(
     fun resumeEmulator() {
         sessionCoroutineScope.launch {
             emulatorManager.resumeEmulator()
+        }
+    }
+
+    /**
+     * The game carries on, holding Up + Select + R for a moment: on HeartGold/SoulSilver's
+     * Pokéwalker menu that sends home the Pokémon out on a stroll, without a Pokéwalker
+     * (overlay 112, ov112_021EB9E4). The game then asks to confirm.
+     */
+    private fun pressSendHome() {
+        sessionCoroutineScope.launch {
+            emulatorManager.resumeEmulator()
+            delay(400)
+            val keys = listOf(Input.UP, Input.SELECT, Input.R)
+            keys.forEach { MelonEmulator.onInputDown(it) }
+            delay(1_200)
+            keys.forEach { MelonEmulator.onInputUp(it) }
         }
     }
 
@@ -453,6 +473,7 @@ class EmulatorViewModel @Inject constructor(
                         }
                     }
                     RomPauseMenuOption.VIEW_ACHIEVEMENTS -> _uiEvent.tryEmit(EmulatorUiEvent.ShowAchievementList)
+                    RomPauseMenuOption.POKEWALKER_SEND_HOME -> pressSendHome()
                     RomPauseMenuOption.RESET -> resetEmulator()
                     RomPauseMenuOption.EXIT -> exitEmulator(force = false)
                 }

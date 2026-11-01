@@ -903,6 +903,7 @@
     <string name="pokewalker_reset">Reset virtual Pokéwalker</string>
     <string name="pokewalker_reset_summary">Start over with a brand-new, unpaired Pokéwalker</string>
     <string name="pokewalker_reset_confirm">The game will see a brand-new Pokéwalker, and any Pokémon on a stroll, its catches and unclaimed watts go with the old one. A copy is kept first: \"Undo a reset or restore an earlier walker\" brings it back. Reset?</string>
+    <string name="pokewalker_send_home">Pokéwalker: send Pokémon home (Up + Select + R)</string>
     <string name="pokewalker_restore">Undo a reset or restore an earlier walker</string>
     <string name="pokewalker_restore_summary">Newest copy: %1$s</string>
     <string name="pokewalker_restore_none">No copies yet. One is kept before every reset, import or unpairing, and one each day.</string>

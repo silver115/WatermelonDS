@@ -10,6 +10,8 @@ enum class RomPauseMenuOption(override val textResource: Int) : PauseMenuOption 
     REWIND(R.string.rewind),
     CHEATS(R.string.cheats),
     VIEW_ACHIEVEMENTS(R.string.achievements),
+    /** HeartGold/SoulSilver: the Pokéwalker app's hidden "send the Pokémon home" (holds Up + Select + R). */
+    POKEWALKER_SEND_HOME(R.string.pokewalker_send_home),
     RESET(R.string.reset),
     EXIT(R.string.exit)
 }
