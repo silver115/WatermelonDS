@@ -94,7 +94,11 @@ class RouteMap internal constructor(
     /** Who the map was made for. */
     internal val party: WalkParty = WalkParty(pokemon),
 ) {
-    private val picture: Bitmap = Bitmap.createBitmap(scene.image, scene.width, scene.height, Bitmap.Config.ARGB_8888)
+    // mutable: the game's moving textures (water, flowers) are written into it as they play
+    // (a bitmap made straight from the pixels can't be written to: setPixels throws)
+    private val picture: Bitmap = Bitmap.createBitmap(scene.width, scene.height, Bitmap.Config.ARGB_8888).also {
+        it.setPixels(scene.image, 0, scene.width, 0, 0, scene.width, scene.height)
+    }
     private val crowd: MapCrowd = MapCrowd(scene, scene.people.filter { it.model in peopleSprites }).also { c ->
         c.wildKinds = extras.wild.filter { it.model in peopleSprites }
     }
