@@ -680,13 +680,13 @@ void VirtualPokewalker::OnRefused(u8 c)
             else
             {
                 if (!why.empty()) Log("The stroll can't be brought back: " + why);
-                SetNotice("The walker has no Pokémon. Choose \"Send Pokémon back home\" in the game to get yours back.");
+                SetNotice("The walker has no Pokémon. To get yours back, hold Up + Select + R on the game's Pokéwalker menu (Send Pokémon back home).");
             }
         }
         else if (!registered)
         {
             Log("Refused: " + game + " has a Pokemon out on this walker, but the walker isn't paired");
-            SetNotice("The walker isn't paired. Choose \"Send Pokémon back home\" in the game to get your Pokémon back.");
+            SetNotice("The walker isn't paired. To get your Pokémon back, hold Up + Select + R on the game's Pokéwalker menu (Send Pokémon back home).");
         }
         else
         {
