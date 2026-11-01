@@ -29,6 +29,7 @@ import me.magnum.melonds.pokewalker.PokewalkerNative
 import me.magnum.melonds.pokewalker.PokewalkerWidget
 import me.magnum.melonds.pokewalker.StepFileImporter
 import me.magnum.melonds.pokewalker.StepLedger
+import me.magnum.melonds.pokewalker.WalkerBackups
 import me.magnum.melonds.pokewalker.WalkerStatus
 import me.magnum.melonds.ui.settings.PreferenceFragmentTitleProvider
 import org.json.JSONObject
@@ -179,6 +180,10 @@ class PokewalkerPreferencesFragment : BasePreferenceFragment(), PreferenceFragme
             confirm(R.string.pokewalker_reset, R.string.pokewalker_reset_confirm) { resetWalker() }
             true
         }
+        findPreference<Preference>("pokewalker_restore")?.setOnPreferenceClickListener {
+            chooseSnapshot()
+            true
+        }
         updateConnectionPreferences()
     }
 
@@ -187,6 +192,11 @@ class PokewalkerPreferencesFragment : BasePreferenceFragment(), PreferenceFragme
         preferenceManager.sharedPreferences?.registerOnSharedPreferenceChangeListener(settingsListener)
         Pokewalker.applySettings(requireContext().applicationContext)
         refreshStatus()
+        val appContext = requireContext().applicationContext
+        lifecycleScope.launch {
+            withContext(Dispatchers.IO) { runCatching { WalkerBackups.daily(appContext) } }
+            if (isAdded) updateRestorePreference()
+        }
     }
 
     override fun onPause() {
@@ -478,7 +488,11 @@ class PokewalkerPreferencesFragment : BasePreferenceFragment(), PreferenceFragme
                         val data = input.readBytes()
                         if (data.size > 70_000) null else data
                     }
-                    if (bytes == null) appContext.getString(R.string.pokewalker_import_eeprom_invalid) else PokewalkerNative.importImage(bytes)
+                    if (bytes == null) appContext.getString(R.string.pokewalker_import_eeprom_invalid)
+                    else {
+                        WalkerBackups.take(appContext, WalkerBackups.BEFORE_IMPORT)
+                        PokewalkerNative.importImage(bytes)
+                    }
                 }.getOrElse { it.message ?: it.javaClass.simpleName }
             }
             if (!isAdded) return@launch
@@ -523,7 +537,13 @@ class PokewalkerPreferencesFragment : BasePreferenceFragment(), PreferenceFragme
 
     private fun unpairWalker() {
         lifecycleScope.launch {
-            val error = withContext(Dispatchers.IO) { runCatching { PokewalkerNative.unpairWalker() }.getOrElse { it.message } }
+            val appContext = requireContext().applicationContext
+            val error = withContext(Dispatchers.IO) {
+                runCatching {
+                    WalkerBackups.take(appContext, WalkerBackups.BEFORE_UNPAIR)
+                    PokewalkerNative.unpairWalker()
+                }.getOrElse { it.message }
+            }
             if (!isAdded) return@launch
             toast(if (error == null) getString(R.string.pokewalker_unpair_done) else getString(R.string.pokewalker_error, error))
             refreshStatus()
@@ -532,10 +552,80 @@ class PokewalkerPreferencesFragment : BasePreferenceFragment(), PreferenceFragme
 
     private fun resetWalker() {
         lifecycleScope.launch {
-            val error = withContext(Dispatchers.IO) { runCatching { PokewalkerNative.resetWalker() }.getOrElse { it.message } }
+            val appContext = requireContext().applicationContext
+            val error = withContext(Dispatchers.IO) {
+                runCatching {
+                    // kept first, so the reset can be undone
+                    WalkerBackups.take(appContext, WalkerBackups.BEFORE_RESET)
+                    PokewalkerNative.resetWalker()
+                }.getOrElse { it.message }
+            }
             if (!isAdded) return@launch
             toast(if (error == null) getString(R.string.pokewalker_reset_done) else getString(R.string.pokewalker_error, error))
             refreshStatus()
+            updateRestorePreference()
+        }
+    }
+
+    // ---- undoing: the copies kept before a reset, an import, unpairing, and one a day ------------
+
+    private fun updateRestorePreference() {
+        val pref = findPreference<Preference>("pokewalker_restore") ?: return
+        val appContext = requireContext().applicationContext
+        lifecycleScope.launch {
+            val newest = withContext(Dispatchers.IO) { runCatching { WalkerBackups.list(appContext).firstOrNull() }.getOrNull() }
+            if (!isAdded) return@launch
+            pref.isEnabled = newest != null
+            pref.summary = if (newest == null) getString(R.string.pokewalker_restore_none) else getString(R.string.pokewalker_restore_summary, describe(newest))
+        }
+    }
+
+    private fun describe(s: WalkerBackups.Snapshot): String {
+        val context = requireContext()
+        val time = android.text.format.DateUtils.formatDateTime(context, s.time,
+            android.text.format.DateUtils.FORMAT_SHOW_DATE or android.text.format.DateUtils.FORMAT_SHOW_TIME or android.text.format.DateUtils.FORMAT_SHOW_WEEKDAY or android.text.format.DateUtils.FORMAT_ABBREV_ALL)
+        val why = getString(when (s.reason) {
+            WalkerBackups.BEFORE_RESET -> R.string.pokewalker_restore_before_reset
+            WalkerBackups.BEFORE_IMPORT -> R.string.pokewalker_restore_before_import
+            WalkerBackups.BEFORE_UNPAIR -> R.string.pokewalker_restore_before_unpair
+            WalkerBackups.BEFORE_RESTORE -> R.string.pokewalker_restore_before_restore
+            else -> R.string.pokewalker_restore_daily
+        })
+        val who = if (s.species > 0) runCatching { PokewalkerNative.speciesName(s.species) }.getOrDefault("").ifBlank { "#${s.species}" } else ""
+        return if (who.isEmpty()) "$why · $time" else getString(R.string.pokewalker_restore_with, why, time, who)
+    }
+
+    private fun chooseSnapshot() {
+        val appContext = requireContext().applicationContext
+        lifecycleScope.launch {
+            val list = withContext(Dispatchers.IO) { runCatching { WalkerBackups.list(appContext) }.getOrDefault(emptyList()) }
+            if (!isAdded) return@launch
+            if (list.isEmpty()) { toast(getString(R.string.pokewalker_restore_none)); return@launch }
+            AlertDialog.Builder(requireContext())
+                .setTitle(R.string.pokewalker_restore)
+                .setItems(list.map { describe(it) }.toTypedArray()) { _, i ->
+                    val s = list[i]
+                    AlertDialog.Builder(requireContext())
+                        .setTitle(R.string.pokewalker_restore)
+                        .setMessage(getString(R.string.pokewalker_restore_confirm, describe(s)))
+                        .setPositiveButton(R.string.ok) { _, _ -> restoreSnapshot(s) }
+                        .setNegativeButton(R.string.cancel, null)
+                        .show()
+                }
+                .setNegativeButton(R.string.cancel, null)
+                .show()
+        }
+    }
+
+    private fun restoreSnapshot(s: WalkerBackups.Snapshot) {
+        val appContext = requireContext().applicationContext
+        lifecycleScope.launch {
+            val error = withContext(Dispatchers.IO) { runCatching { WalkerBackups.restore(appContext, s) }.getOrElse { it.message } }
+            if (!isAdded) return@launch
+            toast(if (error == null) getString(R.string.pokewalker_restore_done) else getString(R.string.pokewalker_error, error))
+            refreshStatus()
+            updateRestorePreference()
+            PokewalkerWidget.updateAll(appContext)
         }
     }
 

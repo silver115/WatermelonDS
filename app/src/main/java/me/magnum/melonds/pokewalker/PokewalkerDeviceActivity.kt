@@ -224,6 +224,9 @@ class PokewalkerDeviceActivity : AppCompatActivity() {
         Choreographer.getInstance().postFrameCallback(frameCallback)
         (skin as? ModernWalkerView)?.hasGame = Pokewalker.openGameIntent(this) != null
         startStatusUpdates()
+        // a copy of the walker once a day, to undo mistakes with (Settings → Pokéwalker)
+        val app = applicationContext
+        lifecycleScope.launch { withContext(Dispatchers.IO) { runCatching { WalkerBackups.daily(app) } } }
         if (Pokewalker.autoSyncEnabled(this)) syncSteps(showResult = false)
         updateMusic()
     }
